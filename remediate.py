@@ -527,7 +527,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
     test_command = custom_test_cmd or profile["default_test"]
 
     # Step A: Baseline gate check with live heartbeat ticker
-    initial_test = _run_with_heartbeat(test_command, f"Verification: {test_command}")
+    initial_test = _run_with_heartbeat(test_command, f"Verification: {test_command}", cwd=working_dir)
     if initial_test.returncode == 0:
         return True
 
@@ -548,7 +548,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         for tf in target_files[:3]:
             _attempt_file_patch(tf, error_output, vuln, plan, tiers["tier1"], tiers["provider"])
 
-        t1_check = _run_with_heartbeat(test_command, "• Verification (tier 1 repair)")
+        t1_check = _run_with_heartbeat(test_command, "Verification (tier 1 repair)", cwd=working_dir)
         if t1_check.returncode == 0:
             return True
         else:
@@ -559,12 +559,13 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         for tf in target_files[:3]:
             _attempt_file_patch(tf, error_output, vuln, plan, tiers["tier2"], tiers["provider"])
 
-        t2_check = _run_with_heartbeat(test_command, "• Verification (tier 2 repair)")
+        t2_check = _run_with_heartbeat(test_command, "Verification (tier 2 repair)", cwd=working_dir)
         if t2_check.returncode == 0:
             return True
 
     # Deterministic rollback on failure
-    subprocess.run("git checkout . && git clean -fd", shell=True)
+    subprocess.run("git checkout .", shell=True)
+    subprocess.run("git clean -ffd", shell=True, input=b"n\n")
     return False
 
 
