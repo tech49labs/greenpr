@@ -1,15 +1,32 @@
 name: 'GreenPR: Autonomous Zero-Hallucination Dependency Remediation'
-description: 'Detects CVEs, repairs breaking changes, and guarantees 100% test pass (Exit Code 0) before opening Pull Requests.'
+description: 'Detects dependency security issues, patches breaking syntax, and guarantees 100% test pass (Exit Code 0) before opening Pull Requests.'
 author: 'tech49labs'
 
 inputs:
   test_cmd:
-    description: 'Custom test command (e.g. pytest, npm test, cargo test). If omitted, auto-detected.'
+    description: 'Custom command to run project test suite (e.g. pytest, npm test, cargo test). If omitted, automatically detected.'
     required: false
     default: ''
   api_key:
-    description: 'GreenPR Engine API Key (Anthropic, OpenAI, or Gemini)'
-    required: true
+    description: 'GreenPR API Key (supports Gemini, Anthropic Claude, OpenAI, DeepSeek, Groq, or custom endpoints)'
+    required: false
+    default: ''
+  gemini_api_key:
+    description: 'Optional Google Gemini API key override'
+    required: false
+    default: ''
+  anthropic_api_key:
+    description: 'Optional Anthropic API key override'
+    required: false
+    default: ''
+  openai_api_key:
+    description: 'Optional OpenAI API key override'
+    required: false
+    default: ''
+  model:
+    description: 'Optional explicit model name override'
+    required: false
+    default: ''
   github_token:
     description: 'GitHub token with contents:write and pull-requests:write permissions'
     required: false
@@ -23,20 +40,22 @@ runs:
       with:
         python-version: '3.11'
 
-    - name: Initialize GreenPR Core Components
+    - name: Initialize GreenPR Scanner Core
       shell: bash
       run: |
-        curl -fsSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o /usr/local/bin/osv-scanner || true
-        chmod +x /usr/local/bin/osv-scanner || true
-        pip install --upgrade pip
-        pip install -r ${{ github.action_path }}/requirements.txt
+        curl -sSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o /usr/local/bin/osv-scanner > /dev/null 2>&1 || true
+        chmod +x /usr/local/bin/osv-scanner > /dev/null 2>&1 || true
+        pip install --quiet --upgrade pip
+        pip install --quiet -r ${{ github.action_path }}/requirements.txt
 
     - name: Execute GreenPR Remediation Engine
       shell: bash
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.api_key }}
-        OPENAI_API_KEY: ${{ inputs.api_key }}
-        GEMINI_API_KEY: ${{ inputs.api_key }}
+        GREENPR_API_KEY: ${{ inputs.api_key }}
+        GEMINI_API_KEY: ${{ inputs.gemini_api_key || inputs.api_key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key || inputs.api_key }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key || inputs.api_key }}
+        GREENPR_MODEL: ${{ inputs.model }}
         GH_TOKEN: ${{ inputs.github_token }}
       run: |
         TEST_ARG=""

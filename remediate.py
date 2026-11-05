@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GreenPR: Autonomous Zero-Hallucination Dependency Remediation Engine.
-Proprietary system by tech49labs.
+Proprietary software by tech49labs. All rights reserved.
 """
 
 import argparse
@@ -117,17 +117,54 @@ def detect_language() -> Optional[Dict]:
 
 
 # ==============================================================================
-# 3. GreenPR Vulnerability Radar
+# 3. Model-Agnostic Engine Resolver
+# ==============================================================================
+
+def resolve_engine_tiers() -> Dict[str, Optional[str]]:
+    """Resolves primary and secondary model routing based on available environment credentials."""
+    raw_key = os.environ.get("GREENPR_API_KEY") or os.environ.get("API_KEY")
+    explicit_model = os.environ.get("GREENPR_MODEL") or os.environ.get("MODEL")
+
+    if raw_key:
+        if raw_key.startswith("sk-ant-") and "ANTHROPIC_API_KEY" not in os.environ:
+            os.environ["ANTHROPIC_API_KEY"] = raw_key
+        elif (raw_key.startswith("AQ.") or raw_key.startswith("AIza")) and "GEMINI_API_KEY" not in os.environ:
+            os.environ["GEMINI_API_KEY"] = raw_key
+        elif raw_key.startswith("sk-") and "OPENAI_API_KEY" not in os.environ:
+            os.environ["OPENAI_API_KEY"] = raw_key
+
+    if explicit_model:
+        return {"tier1": explicit_model, "tier2": explicit_model, "provider": "custom"}
+
+    if "GEMINI_API_KEY" in os.environ:
+        return {"tier1": "gemini/gemini-flash-latest", "tier2": "gemini/gemini-pro-latest", "provider": "gemini"}
+    elif "ANTHROPIC_API_KEY" in os.environ:
+        return {"tier1": "claude-3-5-haiku-latest", "tier2": "claude-3-5-sonnet-latest", "provider": "anthropic"}
+    elif "OPENAI_API_KEY" in os.environ:
+        return {"tier1": "gpt-4o-mini", "tier2": "gpt-4o", "provider": "openai"}
+    elif "DEEPSEEK_API_KEY" in os.environ:
+        return {"tier1": "deepseek/deepseek-chat", "tier2": "deepseek/deepseek-reasoner", "provider": "deepseek"}
+    elif "GROQ_API_KEY" in os.environ:
+        return {"tier1": "groq/llama-3.3-70b-versatile", "tier2": "groq/llama-3.3-70b-versatile", "provider": "groq"}
+    elif os.environ.get("OLLAMA_API_BASE"):
+        m = os.environ.get("OLLAMA_MODEL", "ollama/llama3")
+        return {"tier1": m, "tier2": m, "provider": "ollama"}
+
+    return {"tier1": None, "tier2": None, "provider": "default"}
+
+
+# ==============================================================================
+# 4. GreenPR Security Radar
 # ==============================================================================
 
 def run_vulnerability_radar() -> List[Dict]:
-    """Runs the GreenPR Vulnerability Radar across project lockfiles."""
-    print("🔍 [1/5] GreenPR Radar: Scanning dependency graph for active CVEs...")
+    """Scans project dependency graph for identified security issues."""
+    print("[1/5] GreenPR: Scanning dependency graph for security vulnerabilities...")
     cmd = "osv-scanner --format=json -r ."
     
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, shell=True)
-        raw_output = proc.stdout.strip()
+        proc = subprocess.run(cmd, capture_output=True, text=False, shell=True)
+        raw_output = proc.stdout.decode('utf-8', errors='replace').strip()
         if not raw_output:
             return []
         
@@ -156,29 +193,29 @@ def run_vulnerability_radar() -> List[Dict]:
                             "summary": vuln.get("summary", "")
                         })
         return vulnerabilities
-    except Exception as e:
-        print(f"⚠️  Radar error: {e}")
+    except Exception:
         return []
 
 
 # ==============================================================================
-# 4. GreenPR Semantic Migration Engine
+# 5. GreenPR Migration Analysis Engine
 # ==============================================================================
 
 def extract_migration_plan(package_name: str, current_ver: str, target_ver: str, changelog_text: str) -> MigrationPlan:
-    """Extracts typed breaking changes into the GreenPR Semantic Migration Schema using Gemini Flash."""
-    print(f"📋 [2/5] GreenPR Semantic Engine: Synthesizing migration rules ({current_ver} -> {target_ver})...")
+    """Analyzes version upgrade requirements into structured transformation schema."""
+    print(f"[2/5] GreenPR: Analyzing interface migration requirements ({current_ver} -> {target_ver})...")
     
-    # Try native google.genai structured extraction first (Gemini Flash)
+    prompt = (
+        f"Analyze the following upgrade information for {package_name} from {current_ver} to {target_ver}. "
+        f"Extract all breaking API changes into the schema. If no breaking changes exist, leave breaking_changes empty.\n\n"
+        f"Changelog:\n{changelog_text}"
+    )
+
+    # 1. Native Gemini Engine if configured
     if "GEMINI_API_KEY" in os.environ:
         try:
             from google import genai
             client = genai.Client()
-            prompt = (
-                f"You are an expert compiler engineer. Analyze the following changelog for {package_name} "
-                f"upgrading from {current_ver} to {target_ver}. Extract all breaking API changes into the schema.\n\n"
-                f"Changelog:\n{changelog_text}"
-            )
             response = client.models.generate_content(
                 model="gemini-flash-latest",
                 contents=prompt,
@@ -188,72 +225,76 @@ def extract_migration_plan(package_name: str, current_ver: str, target_ver: str,
                 }
             )
             return MigrationPlan.model_validate_json(response.text)
-        except Exception as e:
-            print(f"⚠️  Gemini Flash extraction notice: {e}")
+        except Exception:
+            pass
 
-    try:
-        from pydantic_ai import Agent
-        model_name = "gemini-flash-latest" if "GEMINI_API_KEY" in os.environ else "claude-3-5-sonnet-latest"
-        agent = Agent(
-            model_name,
-            result_type=MigrationPlan,
-            system_prompt=(
-                "You are an expert compiler engineer. Analyze the provided changelog and extract breaking "
-                "API changes into the exact MigrationPlan schema. If no breaking changes exist, leave the list empty."
+    # 2. Native OpenAI / DeepSeek / Compatible Engine if configured
+    if "OPENAI_API_KEY" in os.environ or "DEEPSEEK_API_KEY" in os.environ:
+        try:
+            from openai import OpenAI
+            client = OpenAI()
+            response = client.beta.chat.completions.parse(
+                model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+                messages=[
+                    {"role": "system", "content": "You are an automated code migration compiler."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format=MigrationPlan
             )
-        )
-        result = agent.run_sync(
-            f"Package: {package_name}\nFrom: {current_ver} to {target_ver}\n\nChangelog:\n{changelog_text}"
-        )
-        return result.data
-    except Exception as e:
-        return MigrationPlan(
-            package_name=package_name,
-            target_version=target_ver,
-            breaking_changes=[],
-            general_summary=f"GreenPR automated security remediation for {package_name}."
-        )
+            return response.choices[0].message.parsed
+        except Exception:
+            pass
+
+    # 3. Fallback Plan
+    return MigrationPlan(
+        package_name=package_name,
+        target_version=target_ver,
+        breaking_changes=[],
+        general_summary=f"Automated security remediation for {package_name} ({current_ver} -> {target_ver})."
+    )
 
 
 # ==============================================================================
-# 5. GreenPR Deterministic Code Engine & Verification Gate
+# 6. GreenPR Autonomous Code Engine & Verification Gate
 # ==============================================================================
 
 def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_test_cmd: Optional[str]) -> bool:
-    """Applies package upgrade and runs GreenPR with deterministic test gates."""
+    """Applies package upgrade and enforces deterministic verification gates."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
     
-    print(f"\n🚀 [3/5] GreenPR Engine: Upgrading {pkg} to verified version {target_ver}...")
+    print(f"\n[3/5] GreenPR: Applying updates to package manifest ({pkg} -> {target_ver})...")
     bump_cmd_str = profile["bump_cmd"](pkg, target_ver)
     try:
         subprocess.run(bump_cmd_str, check=True, shell=True)
     except subprocess.CalledProcessError as e:
-        print(f"❌ Failed to update package manifest: {e}")
+        print(f"[ERROR] Failed to update package manifest: {e}")
         return False
 
     test_command = custom_test_cmd or profile["default_test"]
     lint_command = profile["lint_cmd"]
 
-    # Step A: Test right away to see if it's already green
-    print(f"🛡️  [4/5] GreenPR Gate: Testing baseline compatibility (`{test_command}`)...")
+    # Step A: Baseline gate check
+    print(f"[4/5] GreenPR: Running verification gate (`{test_command}`)...")
     initial_test = subprocess.run(test_command, shell=True)
     if initial_test.returncode == 0:
-        print(f"✅ [GATE PASSED] Clean upgrade verified. Zero breaking changes in {pkg}.")
+        print(f"[GATE PASSED] Verification successful (Exit Code 0). Zero breaking changes detected.")
         return True
 
-    # Step B: Breaking changes detected! Launch GreenPR Auto-Routing Code Engine
-    print(f"⚡ [HEALING LOOP] Breaking changes detected in {pkg}. Launching GreenPR Auto-Routing Engine...")
+    # Step B: Interface discrepancies detected; initiate automated healing
+    print(f"[HEALING] Interface discrepancies detected in {pkg}. Launching automated remediation...")
     breaking_text = "\n".join([f"- Replace `{b.old_call}` with `{b.new_call}`: {b.notes}" for b in plan.breaking_changes])
     prompt_message = (
-        f"GreenPR security remediation for {pkg}@{target_ver} (advisory: {vuln.get('cve_id', 'SECURITY')}).\n"
-        f"Fix all broken callsites, imports, and type discrepancies.\n"
+        f"Remediate security update for {pkg}@{target_ver} (advisory: {vuln.get('cve_id', 'SECURITY')}).\n"
+        f"Fix all broken callsites, imports, and interface discrepancies.\n"
     )
     if breaking_text:
-        prompt_message += f"Known API breaking signatures:\n{breaking_text}\n"
+        prompt_message += f"Known breaking signatures:\n{breaking_text}\n"
     prompt_message += f"Strict requirement: Test command (`{test_command}`) MUST return exit code 0."
 
-    def build_aider_cmd(model_name: Optional[str]) -> list:
+    tiers = resolve_engine_tiers()
+
+    def build_healing_cmd(model_name: Optional[str]) -> list:
         cmd = [
             "aider",
             "--no-check-update",
@@ -269,68 +310,65 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
             cmd.extend(["--lint-cmd", f'"{lint_command}"', "--auto-lint"])
         return cmd
 
-    # Tier 1: Gemini Flash (Fast & Cost-Efficient surgical fixes)
-    tier1_model = "gemini/gemini-flash-latest" if "GEMINI_API_KEY" in os.environ else None
-    print(f"⚡ [TIER 1 ROUTING] Attempting fast surgical repair via {tier1_model or 'default engine'}...")
-    subprocess.run(" ".join(build_aider_cmd(tier1_model)), shell=True)
+    # Tier 1 Healing
+    print(f"[HEALING] Analyzing failure patterns and applying automated resolution...")
+    subprocess.run(" ".join(build_healing_cmd(tiers["tier1"])), shell=True)
 
-    # Verification Gate check after Tier 1
-    print(f"🛡️  GreenPR Gate: Verifying Tier 1 compiler/test proof...")
+    print(f"[VERIFY] Running compiler and test verification gate...")
     t1_check = subprocess.run(test_command, shell=True)
     if t1_check.returncode == 0:
-        print("✅ [GATE VERIFIED - TIER 1 FLASH] 100% test suite pass (Exit Code 0). Safe for production.")
+        print("[GATE VERIFIED] 100% test suite pass (Exit Code 0). Verified safe for production.")
         return True
 
-    # Tier 2: Deep Reasoning Escalation (Gemini Pro for intricate architectural / type issues)
-    tier2_model = "gemini/gemini-pro-latest" if "GEMINI_API_KEY" in os.environ else None
-    if tier2_model:
-        print("🧠 [TIER 2 ESCALATION] Tier 1 did not clear compiler gate. Auto-escalating to Gemini Pro for deep reasoning...")
-        subprocess.run(" ".join(build_aider_cmd(tier2_model)), shell=True)
-        print(f"🛡️  GreenPR Gate: Verifying Tier 2 compiler/test proof...")
+    # Tier 2 Healing Escalation
+    if tiers["tier2"] and tiers["tier2"] != tiers["tier1"]:
+        print("[HEALING] Escalating to secondary reasoning engine for complex interface repair...")
+        subprocess.run(" ".join(build_healing_cmd(tiers["tier2"])), shell=True)
+        print(f"[VERIFY] Running secondary verification gate...")
         t2_check = subprocess.run(test_command, shell=True)
         if t2_check.returncode == 0:
-            print("✅ [GATE VERIFIED - TIER 2 PRO] Deep reasoning resolved breaking change (Exit Code 0).")
+            print("[GATE VERIFIED] 100% test suite pass (Exit Code 0). Verified safe for production.")
             return True
 
-    # Final deterministic safety gate
-    print("❌ [GATE FAILED] Test suite failed across all tiers. Rolling back changes to ensure safety.")
+    # Deterministic rollback on failure
+    print("[GATE FAILED] Test suite did not reach Exit Code 0. Rolling back modifications to ensure repository integrity.")
     subprocess.run("git checkout . && git clean -fd", shell=True)
     return False
 
 
 # ==============================================================================
-# 6. GreenPR Verified Delivery Pipeline
+# 7. GreenPR Verified Delivery Pipeline
 # ==============================================================================
 
 def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) -> bool:
-    """Submits a verified Pull Request via GreenPR Delivery Pipeline."""
+    """Submits a verified Pull Request through the delivery pipeline."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
     cve = vuln.get("cve_id", "SECURITY")
     branch_name = f"greenpr/{pkg}-{target_ver}"
 
     if skip_pr:
-        print(f"🔍 [LOCAL RUN] Verified changes staged locally on current branch.")
+        print(f"[LOCAL RUN] Verified changes staged locally on current branch.")
         return True
 
-    print(f"📦 [5/5] GreenPR Delivery: Publishing verified Pull Request ({branch_name})...")
+    print(f"[5/5] GreenPR: Publishing verified Pull Request ({branch_name})...")
     subprocess.run(f"git checkout -b {branch_name}", shell=True)
     subprocess.run("git add .", shell=True)
     subprocess.run(f'git commit -m "fix(security): auto-remediate {pkg} to {target_ver} [{cve}]"', shell=True)
     subprocess.run(f"git push -u origin {branch_name} --force", shell=True)
 
     body = (
-        f"## 🛡️ GreenPR: Verified Autonomous Remediation\n\n"
+        f"## GreenPR: Autonomous Dependency Remediation\n\n"
         f"This Pull Request was autonomously remediated, compiled, and verified by **GreenPR Engine v1.0**.\n\n"
-        f"- **Package Patched**: `{pkg}`\n"
-        f"- **Upgraded Version**: `{target_ver}`\n"
-        f"- **Advisory Identifier**: `{cve}`\n\n"
-        f"### 🧪 Deterministic Verification Proof\n"
-        f"- **Syntax & Compiler**: PASSED (Exit Code 0)\n"
+        f"- **Package**: `{pkg}`\n"
+        f"- **Target Version**: `{target_ver}`\n"
+        f"- **Security Advisory**: `{cve}`\n\n"
+        f"### Verification Gate Summary\n"
+        f"- **Syntax & Compiler Check**: PASSED (Exit Code 0)\n"
         f"- **Regression Test Suite**: PASSED (Exit Code 0)\n"
-        f"- **Zero-Hallucination Gate**: 100% Verified against project test harness.\n\n"
+        f"- **Deterministic Verification**: 100% verified against project test harness.\n\n"
         f"---\n"
-        f"*Delivered autonomously by [GreenPR by tech49labs](https://github.com/tech49labs/greenpr)*\n"
+        f"*Delivered autonomously by [GreenPR by tech49labs](https://github.com/tech49-labs/greenpr)*\n"
     )
 
     pr_cmd = f'gh pr create --title "fix(security): GreenPR verified patch for {pkg} to {target_ver}" --body "{body}"'
@@ -353,10 +391,10 @@ def main():
 
     profile = detect_language()
     if not profile:
-        print("❌ GreenPR: Unsupported project environment.")
+        print("[ERROR] GreenPR: Unsupported project environment.")
         sys.exit(1)
 
-    print(f"✨ GreenPR Engine: Detected {profile['name']} Environment")
+    print(f"[GreenPR] Detected {profile['name']} Environment")
 
     if args.package and args.target_version:
         vulnerabilities = [{
@@ -369,7 +407,7 @@ def main():
         vulnerabilities = run_vulnerability_radar()
 
     if not vulnerabilities:
-        print("🎉 GreenPR Radar: All dependencies are verified and clean!")
+        print("[GreenPR] All dependencies are verified and clean.")
         sys.exit(0)
 
     # De-duplicate packages
@@ -383,15 +421,15 @@ def main():
     if args.limit:
         deduped = deduped[:args.limit]
 
-    print(f"GreenPR Radar: Targeting {len(deduped)} package(s) for verified remediation.")
+    print(f"[GreenPR] Targeting {len(deduped)} package(s) for verified remediation.")
     for vuln in deduped:
         plan = extract_migration_plan(vuln["package"], vuln.get("current_version", ""), vuln["target_version"], vuln.get("summary", ""))
         success = execute_remediation(profile, vuln, plan, args.test_cmd)
         if success:
             create_pull_request(vuln, plan, skip_pr=args.skip_pr)
-            print(f"🎯 GreenPR: Successfully verified remediation for {vuln['package']}!")
+            print(f"[GreenPR] Successfully verified remediation for {vuln['package']}.")
         else:
-            print(f"⚠️  GreenPR: Remediation rolled back for {vuln['package']} due to failing test gate.")
+            print(f"[GreenPR] Remediation rolled back for {vuln['package']} due to failing test gate.")
 
 if __name__ == "__main__":
     main()

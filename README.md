@@ -1,62 +1,62 @@
-# 🛡️ GreenPR: Autonomous Zero-Hallucination Dependency Remediation
+# GreenPR: Autonomous Zero-Hallucination Dependency Remediation
 
-> **Dependabot bumps versions and breaks your build. GreenPR patches breaking syntax and guarantees 100% green tests before opening a Pull Request.**
+> **Standard security bots bump versions and break your build. GreenPR resolves breaking syntax and guarantees 100% green tests before opening a Pull Request.**
 
 *Engineered by **tech49labs***
 
 ---
 
-## ⚡ The Zero-Hallucination Guarantee
+## The Zero-Hallucination Architecture
 
-Traditional AI tools generate code and leave you to fix the bugs. **GreenPR operates on a closed-loop deterministic verification gate:**
+Traditional automated tools generate unverified code modifications and leave broken builds for developers to debug. **GreenPR operates on a deterministic, closed-loop verification pipeline:**
 
-1. **Vulnerability Radar**: Automatically maps your project's dependency graph against the global CVE advisory database.
-2. **Semantic Migration Engine**: Synthesizes upstream changelogs into rigid, typed API transformation rules.
-3. **Deterministic Code Engine**: Applies surgical, AST-level diffs to deprecated callsites and imports.
-4. **The Zero-Hallucination Gate**: Executes your project's actual compiler and test suite (`npm test`, `pytest`, `cargo test`, `go test`).
-   - If tests fail, the engine enters an autonomous healing loop to repair syntax discrepancies.
-   - If tests cannot achieve **Exit Code 0**, the code is **immediately rolled back**. No broken code is ever committed.
-5. **Verified Delivery Pipeline**: Publishes a cryptographically clean Pull Request with full test logs attached.
-
----
-
-## 🌐 Supported Environments (Auto-Detected)
-
-GreenPR auto-detects and supports all major ecosystems out of the box:
-* **TypeScript / JavaScript** (`npm`, `pnpm`, `yarn`, `bun`, `tsc`, `eslint`, `vitest`/`jest`)
-* **Python** (`pip`, `poetry`, `mypy`, `ruff`, `pytest`)
-* **Go** (`go.mod`, `go build`, `golangci-lint`, `go test`)
-* **Rust** (`Cargo.toml`, `cargo check`, `cargo clippy`, `cargo test`)
-* **Java** (`pom.xml`, `build.gradle`, `mvn test`, `gradle test`)
-* **C# / .NET** (`*.csproj`, `dotnet build`, `dotnet test`)
+1. **Security Radar**: Automatically maps project dependencies across lockfiles to identify vulnerable packages.
+2. **Interface Migration Analysis**: Analyzes target version changes and extracts structured interface transformation rules.
+3. **Automated Remediation Engine**: Applies precise repairs to deprecated callsites, updated imports, and modified method signatures.
+4. **The Deterministic Verification Gate**: Executes your project's actual compiler and test harness (`npm test`, `pytest`, `cargo test`, `go test`, `dotnet test`).
+   - If tests fail, the engine enters an autonomous healing loop to resolve syntax and interface discrepancies.
+   - If the codebase cannot achieve **Exit Code 0**, all modifications are **immediately rolled back**. No broken code is ever committed.
+5. **Verified Delivery Pipeline**: Publishes a cryptographically clean Pull Request with deterministic test pass proof attached.
 
 ---
 
-## 🚀 Usage
+## Supported Ecosystems (Auto-Detected)
 
-### Local CLI Execution
+GreenPR auto-detects and supports all major development environments out of the box:
+* **TypeScript / JavaScript**: `npm`, `pnpm`, `yarn`, `bun`, `tsc`, `eslint`, `vitest`, `jest`
+* **Python**: `pip`, `poetry`, `mypy`, `ruff`, `pytest`
+* **Go**: `go.mod`, `go build`, `golangci-lint`, `go test`
+* **Rust**: `Cargo.toml`, `cargo check`, `cargo clippy`, `cargo test`
+* **Java**: `pom.xml`, `build.gradle`, `mvn test`, `gradle test`
+* **C# / .NET**: `*.csproj`, `*.sln`, `dotnet build`, `dotnet test`
 
-```bash
-# Install GreenPR dependencies
-pip install -r requirements.txt
+---
 
-# Run full vulnerability scan & remediation:
-python remediate.py
+## Model Agnostic Design
 
-# Or target a specific package upgrade:
-python remediate.py --package ws --target-version 8.21.0 --test-cmd "npm test"
-```
+GreenPR is completely model and provider agnostic. You can connect whichever AI intelligence backend fits your organization's compliance and budget:
+
+* **Google Gemini** (Gemini Flash & Gemini Pro)
+* **Anthropic Claude** (Claude 3.5 Haiku & Sonnet)
+* **OpenAI** (GPT-4o mini & GPT-4o)
+* **DeepSeek** (DeepSeek-Chat & DeepSeek-Reasoner)
+* **Groq / Llama** (Open Source Llama 3.3)
+* **Local Self-Hosted Endpoints** (Ollama / vLLM / LiteLLM)
+
+---
+
+## Installation & Deployment
 
 ### GitHub Actions Workflow
 
 Drop `.github/workflows/greenpr.yml` into any repository:
 
 ```yaml
-name: GreenPR Security Remediation
+name: GreenPR Dependency Remediation
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Nightly automated sweep
+    - cron: '0 2 * * *' # Nightly automated remediation sweep
   workflow_dispatch:     # On-demand manual trigger
 
 permissions:
@@ -64,18 +64,31 @@ permissions:
   pull-requests: write
 
 jobs:
-  greenpr:
+  remediate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: tech49labs/greenpr@v1
+      - uses: tech49-labs/greenpr@v1
         with:
           api_key: ${{ secrets.GREENPR_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+### Local CLI Execution
+
+```bash
+# Run full automated dependency scan and verified PR delivery:
+greenpr
+
+# Run verification locally without publishing a remote PR:
+greenpr --skip-pr
+
+# Target a specific package directly:
+greenpr --package ws --target-version 8.21.0 --test-cmd "npm test"
+```
+
 ---
 
-## 📄 License & Commercial Distribution
+## Commercial Distribution
 
-Proprietary enterprise distribution by **tech49labs**. All rights reserved.
+Proprietary software by **tech49labs**. All rights reserved.
