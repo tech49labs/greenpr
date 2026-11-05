@@ -166,12 +166,34 @@ def run_vulnerability_radar() -> List[Dict]:
 # ==============================================================================
 
 def extract_migration_plan(package_name: str, current_ver: str, target_ver: str, changelog_text: str) -> MigrationPlan:
-    """Extracts typed breaking changes into the GreenPR Semantic Migration Schema."""
+    """Extracts typed breaking changes into the GreenPR Semantic Migration Schema using Gemini Flash."""
     print(f"📋 [2/5] GreenPR Semantic Engine: Synthesizing migration rules ({current_ver} -> {target_ver})...")
     
+    # Try native google.genai structured extraction first (Gemini Flash)
+    if "GEMINI_API_KEY" in os.environ:
+        try:
+            from google import genai
+            client = genai.Client()
+            prompt = (
+                f"You are an expert compiler engineer. Analyze the following changelog for {package_name} "
+                f"upgrading from {current_ver} to {target_ver}. Extract all breaking API changes into the schema.\n\n"
+                f"Changelog:\n{changelog_text}"
+            )
+            response = client.models.generate_content(
+                model="gemini-flash-latest",
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_schema": MigrationPlan,
+                }
+            )
+            return MigrationPlan.model_validate_json(response.text)
+        except Exception as e:
+            print(f"⚠️  Gemini Flash extraction notice: {e}")
+
     try:
         from pydantic_ai import Agent
-        model_name = "gemini-2.5-flash" if "GEMINI_API_KEY" in os.environ else "claude-3-5-sonnet-latest"
+        model_name = "gemini-flash-latest" if "GEMINI_API_KEY" in os.environ else "claude-3-5-sonnet-latest"
         agent = Agent(
             model_name,
             result_type=MigrationPlan,
@@ -220,8 +242,8 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         print(f"✅ [GATE PASSED] Clean upgrade verified. Zero breaking changes in {pkg}.")
         return True
 
-    # Step B: Breaking changes detected! Launch GreenPR Code Engine
-    print(f"⚡ [HEALING LOOP] Breaking changes detected in {pkg}. Launching GreenPR Code Engine...")
+    # Step B: Breaking changes detected! Launch GreenPR Auto-Routing Code Engine
+    print(f"⚡ [HEALING LOOP] Breaking changes detected in {pkg}. Launching GreenPR Auto-Routing Engine...")
     breaking_text = "\n".join([f"- Replace `{b.old_call}` with `{b.new_call}`: {b.notes}" for b in plan.breaking_changes])
     prompt_message = (
         f"GreenPR security remediation for {pkg}@{target_ver} (advisory: {vuln.get('cve_id', 'SECURITY')}).\n"
@@ -231,29 +253,49 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         prompt_message += f"Known API breaking signatures:\n{breaking_text}\n"
     prompt_message += f"Strict requirement: Test command (`{test_command}`) MUST return exit code 0."
 
-    engine_cmd = [
-        "aider",
-        "--message", f'"{prompt_message}"',
-        "--test-cmd", f'"{test_command}"',
-        "--auto-test",
-        "--yes-always",
-        "--no-git"
-    ]
-    if lint_command:
-        engine_cmd.extend(["--lint-cmd", f'"{lint_command}"', "--auto-lint"])
+    def build_aider_cmd(model_name: Optional[str]) -> list:
+        cmd = [
+            "aider",
+            "--no-check-update",
+            "--message", f'"{prompt_message}"',
+            "--test-cmd", f'"{test_command}"',
+            "--auto-test",
+            "--yes-always",
+            "--no-git"
+        ]
+        if model_name:
+            cmd.extend(["--model", model_name])
+        if lint_command:
+            cmd.extend(["--lint-cmd", f'"{lint_command}"', "--auto-lint"])
+        return cmd
 
-    subprocess.run(" ".join(engine_cmd), shell=True)
+    # Tier 1: Gemini Flash (Fast & Cost-Efficient surgical fixes)
+    tier1_model = "gemini/gemini-flash-latest" if "GEMINI_API_KEY" in os.environ else None
+    print(f"⚡ [TIER 1 ROUTING] Attempting fast surgical repair via {tier1_model or 'default engine'}...")
+    subprocess.run(" ".join(build_aider_cmd(tier1_model)), shell=True)
 
-    # Final deterministic check
-    print(f"🛡️  GreenPR Gate: Verifying final compiler/test proof...")
-    final_test = subprocess.run(test_command, shell=True)
-    if final_test.returncode == 0:
-        print("✅ [GATE VERIFIED] 100% test suite pass (Exit Code 0). Safe for production.")
+    # Verification Gate check after Tier 1
+    print(f"🛡️  GreenPR Gate: Verifying Tier 1 compiler/test proof...")
+    t1_check = subprocess.run(test_command, shell=True)
+    if t1_check.returncode == 0:
+        print("✅ [GATE VERIFIED - TIER 1 FLASH] 100% test suite pass (Exit Code 0). Safe for production.")
         return True
-    else:
-        print("❌ [GATE FAILED] Test suite failed. Rolling back changes to ensure safety.")
-        subprocess.run("git checkout . && git clean -fd", shell=True)
-        return False
+
+    # Tier 2: Deep Reasoning Escalation (Gemini Pro for intricate architectural / type issues)
+    tier2_model = "gemini/gemini-pro-latest" if "GEMINI_API_KEY" in os.environ else None
+    if tier2_model:
+        print("🧠 [TIER 2 ESCALATION] Tier 1 did not clear compiler gate. Auto-escalating to Gemini Pro for deep reasoning...")
+        subprocess.run(" ".join(build_aider_cmd(tier2_model)), shell=True)
+        print(f"🛡️  GreenPR Gate: Verifying Tier 2 compiler/test proof...")
+        t2_check = subprocess.run(test_command, shell=True)
+        if t2_check.returncode == 0:
+            print("✅ [GATE VERIFIED - TIER 2 PRO] Deep reasoning resolved breaking change (Exit Code 0).")
+            return True
+
+    # Final deterministic safety gate
+    print("❌ [GATE FAILED] Test suite failed across all tiers. Rolling back changes to ensure safety.")
+    subprocess.run("git checkout . && git clean -fd", shell=True)
+    return False
 
 
 # ==============================================================================
