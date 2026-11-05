@@ -336,6 +336,11 @@ def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> Li
             if not working_dir:
                 working_dir = "."
 
+            # Ignore untracked worktrees, build artifacts, test fixtures, and vendor folders
+            skip_patterns = ["node_modules", "worktree", "acceptance-download", ".git", ".cache", "/tmp/", "/dist/", "/build/"]
+            if any(p.lower() in source_path.lower() for p in skip_patterns):
+                continue
+
             for package in result.get("packages", []):
                 pkg_info = package.get("package", {})
                 pkg_name = pkg_info.get("name")
@@ -656,6 +661,11 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
     initial_test = _run_with_heartbeat(test_command, f"Verification: {test_command}", cwd=working_dir)
     if initial_test.returncode == 0:
         return True
+    elif initial_test.returncode == 124:
+        print(f"        ✖ Verification gate timed out (>180s). Rolled back cleanly.")
+        subprocess.run("git checkout .", shell=True)
+        subprocess.run("git clean -ffd", shell=True, input=b"n\n")
+        return False
 
     # Step B: Interface discrepancies detected; initiate proprietary native healing
     error_output = (initial_test.stdout or b'').decode('utf-8', errors='replace') + '\n' + (initial_test.stderr or b'').decode('utf-8', errors='replace')
