@@ -1,0 +1,32 @@
+TECH49 LABS COMMERCIAL & FAIR-SOURCE LICENSE (v1.0)
+Copyright (c) 2026 tech49labs. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person or organization obtaining
+a copy of this software and associated documentation files (the "Software"), to use,
+copy, modify, and run the Software, subject to the following conditions:
+
+1. COMMUNITY & OPEN SOURCE USE (FREE):
+   The Software is free to use without royalty or subscription fees for:
+   (a) Local personal workstation evaluation and testing;
+   (b) Any public open-source repository published under an OSI-approved license.
+
+2. COMMERCIAL USE ON PRIVATE REPOSITORIES:
+   Any automated, CI/CD, or organizational execution of the Software on private
+   repositories requires an active commercial software subscription (Team or
+   Enterprise Monorepo tier) from tech49labs.
+
+3. PROHIBITION OF COMPETITIVE HOSTED SERVICES:
+   You may not redistribute, repackage, or offer the Software as a hosted or
+   managed cloud software-as-a-service (SaaS) product that competes directly
+   with tech49labs without express written permission.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+For commercial licensing inquiries: licensing@tech49labs.com
+Website: https://tech49labs.github.io/greenpr
