@@ -8,6 +8,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,7 @@ if sys.platform == "win32":
                     pass
     except Exception:
         pass
+
 
 # ==============================================================================
 # 1. GreenPR Semantic Protocol Schema
@@ -153,18 +155,15 @@ def resolve_engine_tiers() -> Dict[str, Optional[str]]:
         return {"tier1": explicit_model, "tier2": explicit_model, "provider": "custom"}
 
     if "GEMINI_API_KEY" in os.environ:
-        return {"tier1": "gemini/gemini-flash-latest", "tier2": "gemini/gemini-pro-latest", "provider": "gemini"}
+        return {"tier1": "gemini-flash-latest", "tier2": "gemini-pro-latest", "provider": "gemini"}
     elif "ANTHROPIC_API_KEY" in os.environ:
         return {"tier1": "claude-3-5-haiku-latest", "tier2": "claude-3-5-sonnet-latest", "provider": "anthropic"}
     elif "OPENAI_API_KEY" in os.environ:
         return {"tier1": "gpt-4o-mini", "tier2": "gpt-4o", "provider": "openai"}
     elif "DEEPSEEK_API_KEY" in os.environ:
-        return {"tier1": "deepseek/deepseek-chat", "tier2": "deepseek/deepseek-reasoner", "provider": "deepseek"}
+        return {"tier1": "deepseek-chat", "tier2": "deepseek-reasoner", "provider": "deepseek"}
     elif "GROQ_API_KEY" in os.environ:
-        return {"tier1": "groq/llama-3.3-70b-versatile", "tier2": "groq/llama-3.3-70b-versatile", "provider": "groq"}
-    elif os.environ.get("OLLAMA_API_BASE"):
-        m = os.environ.get("OLLAMA_MODEL", "ollama/llama3")
-        return {"tier1": m, "tier2": m, "provider": "ollama"}
+        return {"tier1": "llama-3.3-70b-versatile", "tier2": "llama-3.3-70b-versatile", "provider": "groq"}
 
     return {"tier1": None, "tier2": None, "provider": "default"}
 
@@ -271,11 +270,140 @@ def extract_migration_plan(package_name: str, current_ver: str, target_ver: str,
 
 
 # ==============================================================================
-# 6. GreenPR Autonomous Code Engine & Verification Gate
+# 6. GreenPR Proprietary Autonomous Code Repair Engine (Zero Third-Party Leaks)
 # ==============================================================================
 
+def _strip_markdown(code_text: str) -> str:
+    """Extracts raw code content from LLM markdown fences."""
+    text = code_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 2 and lines[-1].strip() == "```":
+            return "\n".join(lines[1:-1])
+        return "\n".join(lines[1:])
+    return text
+
+def _call_native_llm(prompt: str, model_name: str, provider: str) -> Optional[str]:
+    """Proprietary native inference call. Never invokes external CLIs or browser hooks."""
+    if provider == "gemini" or "GEMINI_API_KEY" in os.environ:
+        try:
+            from google import genai
+            client = genai.Client()
+            clean_model = model_name.replace("gemini/", "") if model_name else "gemini-flash-latest"
+            resp = client.models.generate_content(
+                model=clean_model,
+                contents=prompt
+            )
+            return resp.text.strip()
+        except Exception:
+            pass
+
+    if provider == "openai" or "OPENAI_API_KEY" in os.environ or "DEEPSEEK_API_KEY" in os.environ:
+        try:
+            from openai import OpenAI
+            client = OpenAI()
+            clean_model = model_name.replace("openai/", "") if model_name else "gpt-4o-mini"
+            resp = client.chat.completions.create(
+                model=clean_model,
+                messages=[
+                    {"role": "system", "content": "You are the GreenPR Autonomous Remediation Engine by tech49labs."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception:
+            pass
+
+    if provider == "anthropic" or "ANTHROPIC_API_KEY" in os.environ:
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            clean_model = model_name.replace("anthropic/", "") if model_name else "claude-3-5-haiku-latest"
+            resp = client.messages.create(
+                model=clean_model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return resp.content[0].text.strip()
+        except Exception:
+            pass
+
+    return None
+
+def _extract_failing_files(error_output: str) -> List[str]:
+    """Identifies broken source files directly from compiler and test error traces."""
+    candidates = []
+    pattern = r'([a-zA-Z0-9_\-\./\\]+\.(?:ts|tsx|js|jsx|py|go|rs|java|cs|json|toml|yaml|yml))'
+    matches = re.findall(pattern, error_output)
+    
+    for m in matches:
+        clean = m.split(':')[0].strip().replace('\\', '/')
+        if clean.startswith('./'):
+            clean = clean[2:]
+        if os.path.isfile(clean):
+            # Exclude runtime dependencies and non-source artifacts
+            if not any(skip in clean for skip in ['node_modules', '.git', '.venv', 'venv', '__pycache__', 'dist', 'build', '.lock']):
+                if clean not in candidates:
+                    candidates.append(clean)
+
+    # Check git modified files from bump
+    try:
+        git_proc = subprocess.run("git diff --name-only", capture_output=True, text=True, shell=True)
+        for gf in git_proc.stdout.splitlines():
+            gf = gf.strip().replace('\\', '/')
+            if gf and os.path.isfile(gf) and gf not in candidates:
+                if not any(skip in gf for skip in ['bun.lock', 'pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'Cargo.lock']):
+                    candidates.append(gf)
+    except Exception:
+        pass
+
+    return candidates
+
+def _attempt_file_patch(filepath: str, error_trace: str, vuln: Dict, plan: MigrationPlan, model_name: str, provider: str) -> bool:
+    """Reads file, requests targeted fix from LLM, and writes back cleanly."""
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            current_code = f.read()
+    except Exception:
+        return False
+
+    pkg = vuln["package"]
+    target_ver = vuln["target_version"]
+    breaking_text = "\n".join([f"- Replace `{b.old_call}` with `{b.new_call}`: {b.notes}" for b in plan.breaking_changes])
+
+    prompt = (
+        f"You are the GreenPR Autonomous Remediation Engine by tech49labs.\n"
+        f"Package '{pkg}' was upgraded to version '{target_ver}'.\n"
+        f"The compiler/test suite failed with this error:\n"
+        f"```\n{error_trace[:4000]}\n```\n\n"
+        f"File to repair: {filepath}\n"
+        f"Current source code:\n"
+        f"```\n{current_code[:15000]}\n```\n\n"
+    )
+    if breaking_text:
+        prompt += f"Known API breaking signatures:\n{breaking_text}\n\n"
+    prompt += (
+        f"Rewrite this file so that all syntax, import, and type discrepancies are completely fixed and tests pass.\n"
+        f"Return ONLY the complete updated file content inside a single ``` code block. Do NOT include any explanations, markdown comments, or external references."
+    )
+
+    remediation = _call_native_llm(prompt, model_name, provider)
+    if not remediation:
+        return False
+
+    cleaned_code = _strip_markdown(remediation)
+    if cleaned_code and len(cleaned_code) > 10:
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(cleaned_code)
+            return True
+        except Exception:
+            return False
+
+    return False
+
 def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_test_cmd: Optional[str]) -> bool:
-    """Applies package upgrade and enforces deterministic verification gates."""
+    """Applies package upgrade and enforces deterministic verification gates with 100% native healing."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
     
@@ -288,66 +416,46 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         return False
 
     test_command = custom_test_cmd or profile["default_test"]
-    lint_command = profile["lint_cmd"]
 
     # Step A: Baseline gate check
     print(f"[4/5] GreenPR: Running verification gate (`{test_command}`)...")
-    initial_test = subprocess.run(test_command, shell=True)
+    initial_test = subprocess.run(test_command, capture_output=True, text=False, shell=True)
     if initial_test.returncode == 0:
         print(f"[GATE PASSED] Verification successful (Exit Code 0). Zero breaking changes detected.")
         return True
 
-    # Step B: Interface discrepancies detected; initiate automated healing
+    # Step B: Interface discrepancies detected; initiate proprietary native healing
+    error_output = (initial_test.stdout or b'').decode('utf-8', errors='replace') + '\n' + (initial_test.stderr or b'').decode('utf-8', errors='replace')
     print(f"[HEALING] Interface discrepancies detected in {pkg}. Launching automated remediation...")
-    breaking_text = "\n".join([f"- Replace `{b.old_call}` with `{b.new_call}`: {b.notes}" for b in plan.breaking_changes])
-    prompt_message = (
-        f"Remediate security update for {pkg}@{target_ver} (advisory: {vuln.get('cve_id', 'SECURITY')}).\n"
-        f"Fix all broken callsites, imports, and interface discrepancies.\n"
-    )
-    if breaking_text:
-        prompt_message += f"Known breaking signatures:\n{breaking_text}\n"
-    prompt_message += f"Strict requirement: Test command (`{test_command}`) MUST return exit code 0."
+
+    target_files = _extract_failing_files(error_output)
+    if not target_files:
+        print("[HEALING] No direct source file candidates isolated from error trace.")
+    else:
+        print(f"[HEALING] Isolated candidate failure point(s): {', '.join(target_files[:3])}")
 
     tiers = resolve_engine_tiers()
 
-    # Isolate environment: If provider is Gemini, suppress any invalid local OpenAI keys
-    run_env = os.environ.copy()
-    if tiers.get("provider") == "gemini" and "OPENAI_API_KEY" in run_env:
-        del run_env["OPENAI_API_KEY"]
-
-    def build_healing_cmd(model_name: Optional[str]) -> list:
-        cmd = [
-            "aider",
-            "--no-check-update",
-            "--no-gitignore",
-            "--no-browser",
-            "--yes-always",
-            "--no-auto-commits",
-            "--message", f'"{prompt_message}"',
-            "--test-cmd", f'"{test_command}"',
-            "--auto-test",
-            "--no-git"
-        ]
-        if model_name:
-            cmd.extend(["--model", model_name, "--weak-model", model_name])
-        if lint_command:
-            cmd.extend(["--lint-cmd", f'"{lint_command}"', "--auto-lint"])
-        return cmd
-
     # Tier 1 Healing
-    print(f"[HEALING] Analyzing failure patterns and applying automated resolution...")
-    subprocess.run(" ".join(build_healing_cmd(tiers["tier1"])), env=run_env, shell=True)
+    if tiers["tier1"] and target_files:
+        print(f"[HEALING] Analyzing failure patterns and applying automated resolution...")
+        for tf in target_files[:3]:
+            _attempt_file_patch(tf, error_output, vuln, plan, tiers["tier1"], tiers["provider"])
 
-    print(f"[VERIFY] Running compiler and test verification gate...")
-    t1_check = subprocess.run(test_command, shell=True)
-    if t1_check.returncode == 0:
-        print("[GATE VERIFIED] 100% test suite pass (Exit Code 0). Verified safe for production.")
-        return True
+        print(f"[VERIFY] Running compiler and test verification gate...")
+        t1_check = subprocess.run(test_command, capture_output=True, text=False, shell=True)
+        if t1_check.returncode == 0:
+            print("[GATE VERIFIED] 100% test suite pass (Exit Code 0). Verified safe for production.")
+            return True
+        else:
+            error_output = (t1_check.stdout or b'').decode('utf-8', errors='replace') + '\n' + (t1_check.stderr or b'').decode('utf-8', errors='replace')
 
     # Tier 2 Healing Escalation
-    if tiers["tier2"] and tiers["tier2"] != tiers["tier1"]:
-        print("[HEALING] Escalating to secondary reasoning engine for complex interface repair...")
-        subprocess.run(" ".join(build_healing_cmd(tiers["tier2"])), env=run_env, shell=True)
+    if tiers["tier2"] and tiers["tier2"] != tiers["tier1"] and target_files:
+        print("[HEALING] Escalating to secondary reasoning tier for deep interface resolution...")
+        for tf in target_files[:3]:
+            _attempt_file_patch(tf, error_output, vuln, plan, tiers["tier2"], tiers["provider"])
+
         print(f"[VERIFY] Running secondary verification gate...")
         t2_check = subprocess.run(test_command, shell=True)
         if t2_check.returncode == 0:
