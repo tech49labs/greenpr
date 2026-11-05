@@ -1,0 +1,49 @@
+name: 'Auto-Heal Zero-Hallucination Dependency Remediation'
+description: 'Autonomously detects CVEs, updates breaking dependencies, fixes code syntax, and only submits PRs if tests pass with exit code 0.'
+author: 'Auto-Heal'
+
+inputs:
+  test_cmd:
+    description: 'Custom test command (e.g. pytest, npm test, cargo test). If omitted, auto-detected.'
+    required: false
+    default: ''
+  api_key:
+    description: 'OpenAI, Anthropic, or Gemini API Key for Aider and Pydantic-AI'
+    required: true
+  github_token:
+    description: 'GitHub token with contents:write and pull-requests:write permissions'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install OSV-Scanner and Auto-Heal Dependencies
+      shell: bash
+      run: |
+        # Install OSV-Scanner binary
+        curl -fsSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o /usr/local/bin/osv-scanner || true
+        chmod +x /usr/local/bin/osv-scanner || true
+        
+        # Install Python dependencies and Aider
+        pip install --upgrade pip
+        pip install -r ${{ github.action_path }}/requirements.txt
+
+    - name: Run Auto-Heal Remediation Pipeline
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.api_key }}
+        OPENAI_API_KEY: ${{ inputs.api_key }}
+        GEMINI_API_KEY: ${{ inputs.api_key }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        TEST_ARG=""
+        if [ -n "${{ inputs.test_cmd }}" ]; then
+          TEST_ARG="--test-cmd \"${{ inputs.test_cmd }}\""
+        fi
+        python ${{ github.action_path }}/remediate.py $TEST_ARG
