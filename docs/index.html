@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GreenPR — Autonomous Dependency Remediation</title>
-  <meta name="description" content="Autonomous zero-hallucination dependency remediation engine. 100% verified test pass before creating Pull Requests.">
+  <title>GreenPR — Isolated Dependency Remediation</title>
+  <meta name="description" content="Isolated dependency updates with baseline checks, OSV rescanning, and reviewable draft pull requests.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -332,245 +332,58 @@
       </div>
     </nav>
 
-    <!-- Hero -->
     <div class="hero">
-      <div class="hero-meta">ENGINEERING RELEASE 1.0</div>
-      <h1>Autonomous dependency remediation.<br>100% test-verified before Pull Request.</h1>
-      <p class="lead">Standard bots bump dependencies blindly and leave broken builds. GreenPR scans vulnerability advisories, repairs breaking syntax, and guarantees an Exit Code 0 test pass before opening a Pull Request.</p>
-      <div class="hero-actions">
-        <a href="#quickstart" class="action-primary">View Quickstart</a>
-        <a href="https://github.com/tech49labs/greenpr" target="_blank" class="action-secondary">GitHub Repository ↗</a>
-      </div>
+      <div class="hero-meta">SAFETY REVISION · REVIEW BEFORE RELEASE</div>
+      <h1>Dependency fixes.<br>Isolated changes. Reviewable evidence.</h1>
+      <p class="lead">Scan committed dependencies, prepare a fix in a temporary Git worktree, and require checks plus an OSV rescan before creating a draft pull request. Your existing local work stays in place.</p>
+      <div class="hero-actions"><a href="#quickstart" class="action-primary">Start with a dry run</a></div>
     </div>
-
-    <!-- Raw Monospace Output (No cartoon dots or shadows) -->
-    <div class="terminal">
-      <div class="t-head">
-        <span>$ greenpr --skip-pr</span>
-        <span>Cosmos monorepo (root)</span>
-      </div>
-      <div><span class="t-green">GreenPR Dependency Remediation Engine v1.0</span> | tech49labs</div>
-      <div>Target:         /workspace/Cosmos</div>
-      <div>Active Profile: <span class="t-white">Polyglot Monorepo (Python, Node.js)</span></div>
-      <div class="t-dim">[GreenPR Radar] Scanning dependency graph for security vulnerabilities...</div>
-      <br>
-      <div>Discovered 5 security remediation(s):</div>
-      <br>
-      <div class="t-dim">  SUBPROJECT               PACKAGE         CURRENT   TARGET    ADVISORY</div>
-      <div class="t-dim">  ---------------------------------------------------------------------------------</div>
-      <div>  enterprise/audit         @vitest/mocker  3.2.4   → 4.1.11    GHSA-82fw-gwwq-j7x9</div>
-      <div>  enterprise/audit         source-map-js   1.2.1   → 1.2.2     GHSA-68fv-2mgg-jv7q</div>
-      <div>  enterprise/audit         tinypool        1.1.1   → 2.1.1     GHSA-5gmw-xhrv-c9v3</div>
-      <div>  enterprise/audit         vite            7.3.6   → 7.3.7     GHSA-587h-7wmj-h5pm</div>
-      <div>  enterprise/audit         vitest          3.2.4   → 3.2.6     GHSA-5xrq-8626-4rwp</div>
-      <div class="t-dim">  ---------------------------------------------------------------------------------</div>
-      <br>
-      <div>Applying remediations:</div>
-      <div>  [1/5] enterprise/audit : @vitest/mocker (3.2.4 → 4.1.11) <span class="t-green">✔ Verified safe (11.0s)</span></div>
-      <div>  [2/5] enterprise/audit : source-map-js (1.2.1 → 1.2.2)  <span class="t-green">✔ Verified safe (7.1s)</span></div>
-      <div>  [3/5] enterprise/audit : tinypool (1.1.1 → 2.1.1)        <span class="t-green">✔ Verified safe (8.1s)</span></div>
-      <div>  [4/5] enterprise/audit : vite (7.3.6 → 7.3.7)            <span class="t-green">✔ Verified safe (6.4s)</span></div>
-      <div>  [5/5] enterprise/audit : vitest (3.2.4 → 3.2.6)          <span class="t-green">✔ Verified safe (7.5s)</span></div>
-      <br>
-      <div class="t-dim">----------------------------------------------------------------</div>
-      <div>Remediation Summary:</div>
-      <div>  <span class="t-green">✔ 5 package(s) verified safe (100% gate pass)</span></div>
-      <div>  ⏱ Total duration: 40s</div>
-      <div class="t-dim">----------------------------------------------------------------</div>
-    </div>
-
-    <!-- Architecture Section (Text-driven, whitespace layout, NO CARDS) -->
     <section id="architecture">
-      <div class="section-label">Architecture</div>
-      <h2>Deterministic, closed-loop execution.</h2>
-      <p class="intro">Every remediation follows a deterministic pipeline. If compilation fails and autonomous healing cannot resolve it, the codebase reverts cleanly.</p>
-
+      <div class="section-label">Safety and evidence</div>
+      <h2>Know what was checked.</h2>
+      <p class="intro">A passing command is useful evidence, not a guarantee of production safety. Every run reports its scope, findings, checks, and delivery status.</p>
       <div class="item-list">
-        <div class="item">
-          <div>
-            <div class="item-num">01</div>
-            <div class="item-title">Semver Filtering</div>
-          </div>
-          <div class="item-body">
-            Parses advisory event trees across branches. Filters out unmaintained legacy major versions and pre-releases to select the lowest stable patch satisfying the CVE without accidental downgrades.
-          </div>
-        </div>
-
-        <div class="item">
-          <div>
-            <div class="item-num">02</div>
-            <div class="item-title">Verification Gate</div>
-          </div>
-          <div class="item-body">
-            Executes your project's native verification suite (<code>pnpm typecheck</code>, <code>pytest</code>, <code>cargo test</code>, <code>go test</code>) inside the target subproject directory. Requires a strict exit code 0 to proceed.
-          </div>
-        </div>
-
-        <div class="item">
-          <div>
-            <div class="item-num">03</div>
-            <div class="item-title">Interface Repair</div>
-          </div>
-          <div class="item-body">
-            When upgrades alter imports, function signatures, or configuration options, the engine isolates candidate files from error traces and applies surgical repairs before re-running verification.
-          </div>
-        </div>
-
-        <div class="item">
-          <div>
-            <div class="item-num">04</div>
-            <div class="item-title">Atomic Rollback</div>
-          </div>
-          <div class="item-body">
-            If a package fails verification and cannot achieve clean compilation through code healing, all staged changes are immediately reverted via non-interactive atomic rollback.
-          </div>
-        </div>
+        <div class="item"><div class="item-title">Isolated attempts</div><div class="item-body">Each package starts from committed HEAD in a separate worktree. Failures discard that attempt. Staged, unstaged, and untracked work in your checkout is excluded and preserved. Only run trusted project code.</div></div>
+        <div class="item"><div class="item-title">Conservative version selection</div><div class="item-body">A candidate must be outside every supported advisory range. Unknown ranges, unfixed advisories, and prereleases remain visible for manual review.</div></div>
+        <div class="item"><div class="item-title">Baseline, checks, rescan</div><div class="item-body">Verify the original project first. After updating persistent dependency files, run all configured checks and confirm the target version with OSV. Scanner errors never mean clean.</div></div>
+        <div class="item"><div class="item-title">Reviewable delivery</div><div class="item-body">Keep a local commit or create a draft PR with evidence. No forced push, merge, or deployment. Independent fixes require integration testing before combining them.</div></div>
       </div>
     </section>
-
-    <hr>
-
-    <!-- Monorepo Section -->
     <section id="monorepo">
-      <div class="section-label">Ecosystems</div>
-      <h2>Polyglot monorepo autonomy.</h2>
-      <p class="intro">Run GreenPR once from the repository root. It sweeps all submodules across languages and applies native package manager tooling in each directory.</p>
-
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Ecosystem</th>
-            <th>Manifest Discovery</th>
-            <th>Package Manager</th>
-            <th>Verification Command</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="highlight">TypeScript / Node</td>
-            <td><code>package.json</code>, <code>pnpm-lock.yaml</code></td>
-            <td><code>pnpm</code>, <code>bun</code>, <code>yarn</code>, <code>npm</code></td>
-            <td><code>pnpm typecheck</code> / <code>test</code></td>
-          </tr>
-          <tr>
-            <td class="highlight">Python</td>
-            <td><code>pyproject.toml</code>, <code>poetry.lock</code></td>
-            <td><code>uv</code>, <code>poetry</code>, <code>pip</code></td>
-            <td><code>pytest</code> / <code>mypy</code></td>
-          </tr>
-          <tr>
-            <td class="highlight">Go</td>
-            <td><code>go.mod</code></td>
-            <td><code>go get</code> + <code>go mod tidy</code></td>
-            <td><code>go test ./...</code></td>
-          </tr>
-          <tr>
-            <td class="highlight">Rust</td>
-            <td><code>Cargo.toml</code></td>
-            <td><code>cargo update --precise</code></td>
-            <td><code>cargo test</code></td>
-          </tr>
-          <tr>
-            <td class="highlight">Java / .NET</td>
-            <td><code>pom.xml</code>, <code>*.csproj</code></td>
-            <td><code>mvn</code>, <code>dotnet</code></td>
-            <td><code>mvn test</code>, <code>dotnet test</code></td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="section-label">Current coverage</div>
+      <h2>Scan broadly. Automate supported updates.</h2>
+      <p class="intro">OSV scans nested manifests. Automatic updates currently cover unambiguous direct Node dependencies with a colocated lockfile and plain, exactly pinned Python requirements.txt files. Dependency categories are preserved.</p>
+      <p>Shared-workspace lockfiles, transitive-only and peer dependencies, managed Python lockfiles, Go, Rust, Java, .NET, and submodules need manual repair in this safety revision. Unsupported findings remain in the report. Node lifecycle scripts are disabled during installs.</p>
+      <p>Both Node typecheck and test scripts run when available. Python uses a private temporary environment. You can specify additional trusted test commands. Git worktrees are not a security sandbox for untrusted code.</p>
     </section>
-
-    <hr>
-
-    <!-- Quickstart -->
     <section id="quickstart">
-      <div class="section-label">Deployment</div>
-      <h2>Run locally or on CI.</h2>
-      <p class="intro">Bring-Your-Own-Compute architecture. Run on local workstations with zero CI cost, or integrate into your existing GitHub Actions runner pipeline.</p>
+      <div class="section-label">First run</div>
+      <h2>Point GreenPR at your project.</h2>
+      <p class="intro">Install Python 3.11+, Git, OSV-Scanner v2, and your project's package manager. Clone GreenPR separately from the project you want to inspect.</p>
+      <pre class="code-snippet">git clone https://github.com/tech49labs/greenpr.git /path/to/greenpr
+python -m pip install -r /path/to/greenpr/requirements.txt
 
-      <div class="item-title" style="margin-bottom: 0.5rem;">Option A — Local Workstation CLI ($0 Compute)</div>
-      <p style="color:var(--text-muted); font-size: 0.95rem;">Run directly on your local machine before committing code. Consumes 0 GitHub Actions compute minutes.</p>
-      
-      <pre class="code-snippet">git clone https://github.com/tech49labs/greenpr.git
-cd greenpr
-pip install -r requirements.txt
+# Use your own project path:
+python /path/to/greenpr/remediate.py --repo /path/to/your-project --preflight
+python /path/to/greenpr/remediate.py --repo /path/to/your-project --dry-run
 
-# Run autonomous remediation across your repo:
-python remediate.py
-
-# Verify and stage changes locally without publishing PR:
-python remediate.py --skip-pr
-
-# Target a specific package directly:
-python remediate.py --package vite --target-version 7.3.7</pre>
-
-      <div class="item-title" style="margin-bottom: 0.5rem;">Option B — GitHub Actions Workflow</div>
-      <p style="color:var(--text-muted); font-size: 0.95rem;">Drop 10 lines of YAML into <code>.github/workflows/greenpr.yml</code>:</p>
-
-      <pre class="code-snippet">- uses: actions/checkout@v4
-  with:
-    fetch-depth: 0
-
-- uses: tech49labs/greenpr@v1
-  with:
-    api_key: ${{ secrets.GREENPR_API_KEY }}
-    github_token: ${{ secrets.GITHUB_TOKEN }}</pre>
+# Create reviewed local branches without pushing:
+python /path/to/greenpr/remediate.py --repo /path/to/your-project --skip-pr</pre>
+      <p>Use a virtual environment for GreenPR. Preflight executes no project code. Dry runs scan committed HEAD and exit 2 when findings exist. A JSON evidence report is written outside the target repository. Exit 1 means failed or incomplete work.</p>
+      <p>This safety revision is not yet released under the old v1 tag. Use a reviewed commit for evaluation. See the <a href="https://github.com/tech49labs/greenpr#readme">README</a> for runner setup, command options, support limits, and exact validation coverage.</p>
     </section>
-
-    <hr>
-
-    <!-- Licensing / Pricing (Minimalist Rows, NO CARDS) -->
     <section id="licensing">
-      <div class="section-label">Licensing</div>
-      <h2>Fair-Source commercial distribution.</h2>
-      <p class="intro">Free for public open-source repositories and local evaluation. Commercial private repository usage requires an active license.</p>
-
+      <div class="section-label">Licensing</div><h2>Manual commercial agreements.</h2>
+      <p class="intro">Source-available software under the Tech49 Labs Commercial &amp; Fair-Source License. The same code is distributed across these offers; commercial permissions and support are agreed in writing.</p>
       <div class="pricing-rows">
-        <div class="pricing-row">
-          <div>
-            <div class="tier-name">Community</div>
-            <div class="tier-target">Open source & evaluation</div>
-          </div>
-          <div class="tier-price">$0 <span>/ mo</span></div>
-          <div class="tier-specs">
-            Public repository usage, vulnerability radar scan, semver target resolution, deterministic Exit Code 0 verification gate, atomic rollback.
-          </div>
-        </div>
-
-        <div class="pricing-row">
-          <div>
-            <div class="tier-name">Team</div>
-            <div class="tier-target">Commercial repositories</div>
-          </div>
-          <div class="tier-price">$49 <span>/ repo / mo</span></div>
-          <div class="tier-specs">
-            Private commercial repository license, autonomous multi-tier code healing, breaking API signature refactoring, lockfile synchronization, up to 10 monorepo subprojects.
-          </div>
-        </div>
-
-        <div class="pricing-row">
-          <div>
-            <div class="tier-name">Enterprise</div>
-            <div class="tier-target">Scale-up & monorepos</div>
-          </div>
-          <div class="tier-price">$899 <span>/ org / mo</span></div>
-          <div class="tier-specs">
-            Organization-wide unlimited repositories & subprojects, air-gapped / private VPC runner support, self-hosted model endpoints (Ollama / vLLM), zero-hallucination compliance SLA guarantee.
-          </div>
-        </div>
+        <div class="pricing-row"><div class="tier-name">Community</div><div class="tier-price">$0</div><div class="tier-specs">Personal local evaluation and public OSI-licensed repository use under the license.</div></div>
+        <div class="pricing-row"><div class="tier-name">Team</div><div class="tier-price">$49 <span>/ repo / mo</span></div><div class="tier-specs">Contact us for a private-repository commercial agreement and applicable support terms.</div></div>
+        <div class="pricing-row"><div class="tier-name">Enterprise</div><div class="tier-price">$899 <span>/ org / mo</span></div><div class="tier-specs">Contact us to agree organization scope and deployment/support requirements.</div></div>
       </div>
+      <p><a href="mailto:licensing@tech49labs.com">Request a commercial agreement</a>. This repository has no checkout, activation system, automatic renewal/cancellation, customer portal, or technical tier limits. Confirm your agreement before commercial private-repository use.</p>
+      <p>Model-provider costs are separate from licensing. Air-gapped execution, self-hosted inference, and an SLA require separate validation and a written agreement; they are not guarantees of the default action.</p>
     </section>
-
-    <!-- Footer -->
-    <footer>
-      <div>© 2026 tech49labs. GreenPR is proprietary software. All rights reserved.</div>
-      <div>
-        <a href="https://github.com/tech49labs/greenpr" target="_blank">GitHub</a> &nbsp;·&nbsp;
-        <a href="mailto:licensing@tech49labs.com">licensing@tech49labs.com</a>
-      </div>
-    </footer>
-
+    <footer><div>© 2026 tech49labs</div><a href="https://github.com/tech49labs/greenpr/blob/main/LICENSE">License</a> · <a href="mailto:licensing@tech49labs.com">licensing@tech49labs.com</a></footer>
   </div>
-
 </body>
 </html>
