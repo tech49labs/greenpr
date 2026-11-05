@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 from typing import Dict, List, Optional
+from packaging import version
 from pydantic import BaseModel, Field
 
 # Ensure UTF-8 output on Windows consoles
@@ -56,48 +57,57 @@ class MigrationPlan(BaseModel):
 
 
 # ==============================================================================
-# 2. Universal Language Adapters
+# 2. Universal Language Adapters & Repository Discovery
 # ==============================================================================
+
+def parse_ver(v_str: str):
+    """Parses arbitrary version strings into comparable objects safely."""
+    clean = re.sub(r'^[v=\^~><\s]+', '', str(v_str).strip())
+    try:
+        return version.parse(clean)
+    except Exception:
+        parts = []
+        for x in re.split(r'[\.\-+_]', clean):
+            if x.isdigit():
+                parts.append(int(x))
+            else:
+                parts.append(0)
+        return tuple(parts)
 
 LANGUAGE_PROFILES = {
     "node": {
         "name": "Node.js / TypeScript",
         "ecosystems": ["npm"],
-        "detect": lambda: os.path.exists("package.json"),
-        "bump_cmd": lambda pkg, ver: (
-            f"bun add -d {pkg}@{ver}" if os.path.exists("bun.lock") or os.path.exists("bun.lockb")
-            else f"pnpm add -D -w {pkg}@{ver}" if os.path.exists("pnpm-workspace.yaml")
-            else f"pnpm add -D {pkg}@{ver}" if os.path.exists("pnpm-lock.yaml")
-            else f"yarn add -D {pkg}@{ver}" if os.path.exists("yarn.lock")
+        "detect": lambda p: os.path.exists(os.path.join(p, "package.json")),
+        "bump_cmd": lambda pkg, ver, p=".": (
+            f"bun add -d {pkg}@{ver}" if os.path.exists(os.path.join(p, "bun.lock")) or os.path.exists(os.path.join(p, "bun.lockb"))
+            else f"pnpm add -D -w {pkg}@{ver}" if (p in (".", "") and os.path.exists("pnpm-workspace.yaml"))
+            else f"pnpm add -D {pkg}@{ver}" if (os.path.exists(os.path.join(p, "pnpm-lock.yaml")) or os.path.exists("pnpm-lock.yaml") or os.path.exists("pnpm-workspace.yaml"))
+            else f"yarn add -D {pkg}@{ver}" if os.path.exists(os.path.join(p, "yarn.lock")) or os.path.exists("yarn.lock")
             else f"npm install --save-dev {pkg}@{ver}"
         ),
-        "lint_cmd": "npx eslint . --fix" if os.path.exists(".eslintrc.json") or os.path.exists("eslint.config.js") else None,
-        "compile_cmd": "npx tsc --noEmit" if os.path.exists("tsconfig.json") else None,
-        "default_test": (
-            "bun test" if os.path.exists("bun.lock") and not os.path.exists("package.json")
-            else "bun run test" if os.path.exists("bun.lock") or os.path.exists("bun.lockb")
-            else "pnpm test" if os.path.exists("pnpm-lock.yaml")
-            else "yarn test" if os.path.exists("yarn.lock")
-            else "npm test"
-        ),
+        "lint_cmd": "npx eslint . --fix",
+        "compile_cmd": "npx tsc --noEmit",
+        "default_test": "npm test",
     },
     "python": {
         "name": "Python",
         "ecosystems": ["pypi"],
-        "detect": lambda: os.path.exists("pyproject.toml") or os.path.exists("requirements.txt") or os.path.exists("poetry.lock"),
-        "bump_cmd": lambda pkg, ver: (
-            f"poetry add {pkg}=={ver}" if os.path.exists("poetry.lock")
+        "detect": lambda p: os.path.exists(os.path.join(p, "pyproject.toml")) or os.path.exists(os.path.join(p, "requirements.txt")) or os.path.exists(os.path.join(p, "poetry.lock")),
+        "bump_cmd": lambda pkg, ver, p=".": (
+            f"poetry add {pkg}=={ver}" if os.path.exists(os.path.join(p, "poetry.lock")) or os.path.exists("poetry.lock")
+            else f"uv pip install {pkg}=={ver}" if shutil.which("uv")
             else f"pip install {pkg}=={ver}"
         ),
         "lint_cmd": "ruff check . --fix" if shutil.which("ruff") else None,
-        "compile_cmd": "mypy ." if shutil.which("mypy") and os.path.exists("mypy.ini") else None,
+        "compile_cmd": "mypy ." if shutil.which("mypy") else None,
         "default_test": "pytest",
     },
     "go": {
         "name": "Go",
         "ecosystems": ["go"],
-        "detect": lambda: os.path.exists("go.mod"),
-        "bump_cmd": lambda pkg, ver: f"go get {pkg}@{ver} && go mod tidy",
+        "detect": lambda p: os.path.exists(os.path.join(p, "go.mod")),
+        "bump_cmd": lambda pkg, ver, p=".": f"go get {pkg}@{ver} && go mod tidy",
         "lint_cmd": "golangci-lint run --fix" if shutil.which("golangci-lint") else None,
         "compile_cmd": "go build ./...",
         "default_test": "go test ./...",
@@ -105,8 +115,8 @@ LANGUAGE_PROFILES = {
     "rust": {
         "name": "Rust",
         "ecosystems": ["crates.io"],
-        "detect": lambda: os.path.exists("Cargo.toml"),
-        "bump_cmd": lambda pkg, ver: f"cargo update -p {pkg} --precise {ver}",
+        "detect": lambda p: os.path.exists(os.path.join(p, "Cargo.toml")),
+        "bump_cmd": lambda pkg, ver, p=".": f"cargo update -p {pkg} --precise {ver}",
         "lint_cmd": "cargo clippy --fix --allow-dirty",
         "compile_cmd": "cargo check",
         "default_test": "cargo test",
@@ -114,9 +124,9 @@ LANGUAGE_PROFILES = {
     "java": {
         "name": "Java (Maven / Gradle)",
         "ecosystems": ["maven"],
-        "detect": lambda: os.path.exists("pom.xml") or os.path.exists("build.gradle"),
-        "bump_cmd": lambda pkg, ver: (
-            f"mvn versions:use-dep-version -Dincludes={pkg} -DdepVersion={ver}" if os.path.exists("pom.xml")
+        "detect": lambda p: os.path.exists(os.path.join(p, "pom.xml")) or os.path.exists(os.path.join(p, "build.gradle")),
+        "bump_cmd": lambda pkg, ver, p=".": (
+            f"mvn versions:use-dep-version -Dincludes={pkg} -DdepVersion={ver}" if os.path.exists(os.path.join(p, "pom.xml"))
             else "./gradlew dependencyUpdates"
         ),
         "lint_cmd": None,
@@ -126,19 +136,91 @@ LANGUAGE_PROFILES = {
     "dotnet": {
         "name": "C# / .NET",
         "ecosystems": ["nuget"],
-        "detect": lambda: len(glob.glob("*.csproj")) > 0 or len(glob.glob("*.sln")) > 0,
-        "bump_cmd": lambda pkg, ver: f"dotnet add package {pkg} --version {ver}",
+        "detect": lambda p: len(glob.glob(os.path.join(p, "*.csproj"))) > 0 or len(glob.glob(os.path.join(p, "*.sln"))) > 0,
+        "bump_cmd": lambda pkg, ver, p=".": f"dotnet add package {pkg} --version {ver}",
         "lint_cmd": "dotnet format",
         "compile_cmd": "dotnet build --no-restore",
         "default_test": "dotnet test",
     },
 }
 
-def detect_language() -> Optional[Dict]:
+def get_profile_for_dir(dir_path: str = ".") -> Optional[Dict]:
+    """Resolves language profile for a specific directory."""
     for key, profile in LANGUAGE_PROFILES.items():
-        if profile["detect"]():
+        if profile["detect"](dir_path):
             return profile
     return None
+
+def discover_repository_profiles(root_dir: str = ".") -> List[Dict]:
+    """Discovers all active language profiles and subprojects across the repository."""
+    found = []
+    seen = set()
+
+    root_prof = get_profile_for_dir(root_dir)
+    if root_prof:
+        found.append(root_prof)
+        seen.add(root_prof["name"])
+
+    try:
+        for entry in os.scandir(root_dir):
+            if entry.is_dir() and not entry.name.startswith(".") and entry.name not in ("node_modules", "dist", "build", "target", "vendor", "venv", ".venv", "__pycache__"):
+                sub_p = get_profile_for_dir(entry.path)
+                if sub_p and sub_p["name"] not in seen:
+                    found.append(sub_p)
+                    seen.add(sub_p["name"])
+                try:
+                    for sub_entry in os.scandir(entry.path):
+                        if sub_entry.is_dir() and not sub_entry.name.startswith(".") and sub_entry.name not in ("node_modules", "dist", "build", "target", "vendor", "venv", ".venv", "__pycache__"):
+                            leaf_p = get_profile_for_dir(sub_entry.path)
+                            if leaf_p and leaf_p["name"] not in seen:
+                                found.append(leaf_p)
+                                seen.add(leaf_p["name"])
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return found
+
+def resolve_subproject_test_cmd(working_dir: str, custom_test_cmd: Optional[str] = None) -> str:
+    """Intelligently detects or applies the verification command for a subproject directory."""
+    sub_profile = get_profile_for_dir(working_dir)
+    
+    if custom_test_cmd:
+        if working_dir in (".", ""):
+            return custom_test_cmd
+        
+        is_python_cmd = any(k in custom_test_cmd for k in ["pytest", "python", "unittest"])
+        is_node_cmd = any(k in custom_test_cmd for k in ["pnpm", "npm", "yarn", "bun", "tsc", "vitest", "jest"])
+        
+        sub_is_python = sub_profile and sub_profile["name"] == "Python"
+        sub_is_node = sub_profile and "Node" in sub_profile["name"]
+        
+        if (is_python_cmd and sub_is_python) or (is_node_cmd and sub_is_node):
+            return custom_test_cmd
+
+    pkg_json = os.path.join(working_dir, "package.json")
+    if os.path.exists(pkg_json):
+        try:
+            with open(pkg_json, "r", encoding="utf-8", errors="replace") as f:
+                pj = json.load(f)
+            scripts = pj.get("scripts", {})
+            pkg_mgr = "bun" if os.path.exists(os.path.join(working_dir, "bun.lock")) or os.path.exists(os.path.join(working_dir, "bun.lockb")) else \
+                      "pnpm" if os.path.exists(os.path.join(working_dir, "pnpm-lock.yaml")) or os.path.exists("pnpm-lock.yaml") or os.path.exists("pnpm-workspace.yaml") else \
+                      "yarn" if os.path.exists(os.path.join(working_dir, "yarn.lock")) else "npm"
+            
+            if "typecheck" in scripts:
+                return f"{pkg_mgr} run typecheck" if pkg_mgr == "npm" else f"{pkg_mgr} typecheck"
+            elif "test" in scripts:
+                return f"{pkg_mgr} test"
+            elif os.path.exists(os.path.join(working_dir, "tsconfig.json")):
+                return "npx tsc --noEmit"
+        except Exception:
+            pass
+
+    if sub_profile:
+        return sub_profile.get("default_test", "pytest")
+    return "pytest"
 
 
 # ==============================================================================
@@ -176,8 +258,62 @@ def resolve_engine_tiers() -> Dict[str, Optional[str]]:
 
 
 # ==============================================================================
-# 4. GreenPR Security Radar
+# 4. GreenPR Security Radar & Semver Target Selector
 # ==============================================================================
+
+def select_target_version(pkg_name: str, current_ver: Optional[str], vulnerabilities: List[Dict]) -> Optional[str]:
+    """Finds the optimal, non-breaking fixed version that satisfies security advisories."""
+    all_fixes = []
+    for vuln in vulnerabilities:
+        for aff in vuln.get("affected", []):
+            aff_pkg = aff.get("package", {}).get("name")
+            if aff_pkg and aff_pkg != pkg_name:
+                continue
+            for r in aff.get("ranges", []):
+                for ev in r.get("events", []):
+                    if "fixed" in ev and ev["fixed"]:
+                        all_fixes.append(ev["fixed"])
+
+    all_fixes = list(dict.fromkeys(all_fixes))
+    if not all_fixes:
+        return None
+
+    if not current_ver or current_ver in ("current", ""):
+        try:
+            return str(max(all_fixes, key=parse_ver))
+        except Exception:
+            return all_fixes[0]
+
+    cur_parsed = parse_ver(current_ver)
+    
+    # Filter candidate fixes >= current_ver
+    gte_fixes = []
+    for f in all_fixes:
+        try:
+            if parse_ver(f) >= cur_parsed:
+                gte_fixes.append(f)
+        except Exception:
+            pass
+
+    if not gte_fixes:
+        # All available fixes are strictly older than current version. Prevent invalid downgrades.
+        return None
+
+    # Separate stable releases from pre-releases
+    def is_prerelease(v):
+        try:
+            p = parse_ver(v)
+            return getattr(p, "is_prerelease", False)
+        except Exception:
+            return False
+
+    stable_gte = [f for f in gte_fixes if not is_prerelease(f)]
+    pool = stable_gte if stable_gte else gte_fixes
+
+    try:
+        return str(min(pool, key=parse_ver))
+    except Exception:
+        return pool[0]
 
 def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> List[Dict]:
     """Scans project dependency graph for identified security issues with strict monorepo ecosystem binding."""
@@ -192,7 +328,6 @@ def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> Li
         
         data = json.loads(raw_output)
         vulnerabilities = []
-        isolated_ecosystems = {}
 
         for result in data.get("results", []):
             source_info = result.get("source", {})
@@ -207,37 +342,30 @@ def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> Li
                 current_ver = pkg_info.get("version")
                 ecosystem = pkg_info.get("ecosystem", "")
 
-                # Monorepo ecosystem isolation
+                # Monorepo ecosystem filter
                 if active_ecosystems and ecosystem:
                     allowed = [e.lower() for e in active_ecosystems]
                     if ecosystem.lower() not in allowed:
-                        isolated_ecosystems[ecosystem] = isolated_ecosystems.get(ecosystem, 0) + 1
                         continue
 
-                for vuln in package.get("vulnerabilities", []):
-                    vuln_id = vuln.get("id")
-                    fixed_version = None
-                    for affected in vuln.get("affected", []):
-                        for r in affected.get("ranges", []):
-                            for event in r.get("events", []):
-                                if "fixed" in event:
-                                    fixed_version = event["fixed"]
-                                    break
-                    if pkg_name and fixed_version:
-                        vulnerabilities.append({
-                            "package": pkg_name,
-                            "current_version": current_ver,
-                            "target_version": fixed_version,
-                            "cve_id": vuln_id,
-                            "summary": vuln.get("summary", ""),
-                            "ecosystem": ecosystem,
-                            "manifest_path": source_path,
-                            "working_dir": working_dir
-                        })
+                vuln_list = package.get("vulnerabilities", [])
+                target_version = select_target_version(pkg_name, current_ver, vuln_list)
+                if not target_version:
+                    continue
 
-        if isolated_ecosystems:
-            for eco, count in isolated_ecosystems.items():
-                print(f"[Monorepo Radar] Isolated {count} {eco} vulnerability(ies) in submodules (filtered out for current ecosystem profile).")
+                primary_vuln = vuln_list[0] if vuln_list else {}
+                vuln_id = primary_vuln.get("id", "SECURITY")
+
+                vulnerabilities.append({
+                    "package": pkg_name,
+                    "current_version": current_ver,
+                    "target_version": target_version,
+                    "cve_id": vuln_id,
+                    "summary": primary_vuln.get("summary", ""),
+                    "ecosystem": ecosystem,
+                    "manifest_path": source_path,
+                    "working_dir": working_dir
+                })
 
         return vulnerabilities
     except Exception:
@@ -256,7 +384,6 @@ def extract_migration_plan(package_name: str, current_ver: str, target_ver: str,
         f"Changelog:\n{changelog_text}"
     )
 
-    # 1. Native Gemini Engine if configured
     if "GEMINI_API_KEY" in os.environ:
         try:
             from google import genai
@@ -273,7 +400,6 @@ def extract_migration_plan(package_name: str, current_ver: str, target_ver: str,
         except Exception:
             pass
 
-    # 2. Native OpenAI / DeepSeek / Compatible Engine if configured
     if "OPENAI_API_KEY" in os.environ or "DEEPSEEK_API_KEY" in os.environ:
         try:
             from openai import OpenAI
@@ -290,7 +416,6 @@ def extract_migration_plan(package_name: str, current_ver: str, target_ver: str,
         except Exception:
             pass
 
-    # 3. Fallback Plan
     return MigrationPlan(
         package_name=package_name,
         target_version=target_ver,
@@ -300,7 +425,7 @@ def extract_migration_plan(package_name: str, current_ver: str, target_ver: str,
 
 
 # ==============================================================================
-# 6. GreenPR Proprietary Autonomous Code Repair Engine (Zero Third-Party Leaks)
+# 6. GreenPR Autonomous Code Repair Engine (Zero Third-Party Leaks)
 # ==============================================================================
 
 def _strip_markdown(code_text: str) -> str:
@@ -371,12 +496,10 @@ def _extract_failing_files(error_output: str) -> List[str]:
         if clean.startswith('./'):
             clean = clean[2:]
         if os.path.isfile(clean):
-            # Exclude runtime dependencies and non-source artifacts
             if not any(skip in clean for skip in ['node_modules', '.git', '.venv', 'venv', '__pycache__', 'dist', 'build', '.lock']):
                 if clean not in candidates:
                     candidates.append(clean)
 
-    # Check git modified files from bump
     try:
         git_proc = subprocess.run("git diff --name-only", capture_output=True, text=True, shell=True)
         for gf in git_proc.stdout.splitlines():
@@ -469,9 +592,11 @@ def resolve_package_bump_command(vuln: Dict, profile: Dict) -> str:
 
     # 1. NPM / JavaScript Ecosystem
     if ecosystem == "npm" or "npm" in ecosystem:
-        if os.path.exists(os.path.join(wdir, "bun.lock")) or os.path.exists("bun.lock") or os.path.exists("bun.lockb"):
+        if os.path.exists(os.path.join(wdir, "bun.lock")) or os.path.exists(os.path.join(wdir, "bun.lockb")):
             return f"bun add -d {pkg}@{ver}"
-        elif os.path.exists("pnpm-workspace.yaml"):
+        elif os.path.exists("pnpm-workspace.yaml") or os.path.exists(os.path.join(wdir, "pnpm-workspace.yaml")):
+            if wdir not in (".", ""):
+                return f"pnpm add -D {pkg}@{ver}"
             return f"pnpm add -D -w {pkg}@{ver}"
         elif os.path.exists(os.path.join(wdir, "pnpm-lock.yaml")) or os.path.exists("pnpm-lock.yaml"):
             return f"pnpm add -D {pkg}@{ver}"
@@ -497,16 +622,16 @@ def resolve_package_bump_command(vuln: Dict, profile: Dict) -> str:
     if ecosystem in ("crates.io", "cargo", "rust"):
         return f"cargo update -p {pkg} --precise {ver}"
 
-    # Default to profile bump command
-    return profile["bump_cmd"](pkg, ver)
+    return profile["bump_cmd"](pkg, ver, wdir)
 
 def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_test_cmd: Optional[str], verbose: bool = False) -> bool:
     """Applies package upgrade and enforces deterministic verification gates with 100% native healing."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
     working_dir = vuln.get("working_dir") or "."
+    sub_profile = get_profile_for_dir(working_dir) or profile
     
-    bump_cmd_str = resolve_package_bump_command(vuln, profile)
+    bump_cmd_str = resolve_package_bump_command(vuln, sub_profile)
     sys.stdout.write(f"        • Manifest: updating {pkg} to {target_ver}...")
     sys.stdout.flush()
     try:
@@ -516,7 +641,8 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
             proc = subprocess.run(bump_cmd_str, capture_output=True, text=False, shell=True, cwd=working_dir)
             if proc.returncode != 0:
                 sys.stdout.write(f" ✖ FAILED\n")
-                print(f"          [ERROR] {proc.stderr.decode('utf-8', errors='replace').strip()[:200]}")
+                err_msg = proc.stderr.decode('utf-8', errors='replace').strip()[:200]
+                print(f"          [ERROR] {err_msg}")
                 return False
         sys.stdout.write(f" done\n")
     except subprocess.CalledProcessError as e:
@@ -524,7 +650,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         print(f"          [ERROR] {e}")
         return False
 
-    test_command = custom_test_cmd or profile["default_test"]
+    test_command = resolve_subproject_test_cmd(working_dir, custom_test_cmd)
 
     # Step A: Baseline gate check with live heartbeat ticker
     initial_test = _run_with_heartbeat(test_command, f"Verification: {test_command}", cwd=working_dir)
@@ -668,20 +794,31 @@ def main():
     parser.add_argument("--ecosystem", type=str, default=None, help="Filter by ecosystem (npm, pypi, go, crates.io, all)")
     args = parser.parse_args()
 
-    profile = detect_language()
-    if not profile:
+    profiles = discover_repository_profiles(".")
+    if not profiles:
         print("[ERROR] GreenPR: Unsupported project environment.")
         sys.exit(1)
 
+    primary_profile = profiles[0]
+    if len(profiles) > 1:
+        lang_names = ", ".join([p["name"].split(" ")[0] for p in profiles])
+        profile_label = f"Polyglot Monorepo ({lang_names})"
+    else:
+        profile_label = primary_profile["name"]
+
     print(f"GreenPR Dependency Remediation Engine v1.0 | tech49labs")
     print(f"Target:         {os.getcwd()}")
-    print(f"Active Profile: {profile['name']}")
+    print(f"Active Profile: {profile_label}")
 
     # Determine target ecosystems
     if args.ecosystem:
         target_ecos = None if args.ecosystem.lower() == "all" else [args.ecosystem.lower()]
     else:
-        target_ecos = profile.get("ecosystems")
+        # Default in monorepo: scan all detected ecosystems
+        if len(profiles) > 1:
+            target_ecos = None
+        else:
+            target_ecos = primary_profile.get("ecosystems")
 
     if args.package and args.target_version:
         vulnerabilities = [{
@@ -696,15 +833,16 @@ def main():
         vulnerabilities = run_vulnerability_radar(active_ecosystems=target_ecos)
 
     if not vulnerabilities:
-        print(f"\n✔ All {profile['name']} dependencies are verified and clean.\n")
+        print(f"\n✔ All {profile_label} dependencies are verified and clean.\n")
         sys.exit(0)
 
-    # De-duplicate packages
-    seen_packages = set()
+    # De-duplicate packages per (subproject, package)
+    seen_keys = set()
     deduped = []
     for v in vulnerabilities:
-        if v["package"] not in seen_packages:
-            seen_packages.add(v["package"])
+        key = (v.get("working_dir", "."), v["package"])
+        if key not in seen_keys:
+            seen_keys.add(key)
             deduped.append(v)
 
     if args.limit:
@@ -732,7 +870,7 @@ def main():
 
         pkg_start = time.time()
         plan = extract_migration_plan(pkg, cur, tgt, vuln.get("summary", ""))
-        success = execute_remediation(profile, vuln, plan, args.test_cmd, verbose=args.verbose)
+        success = execute_remediation(primary_profile, vuln, plan, args.test_cmd, verbose=args.verbose)
         pkg_dur = time.time() - pkg_start
 
         if success:
