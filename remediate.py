@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -174,7 +175,7 @@ def resolve_engine_tiers() -> Dict[str, Optional[str]]:
 
 def run_vulnerability_radar() -> List[Dict]:
     """Scans project dependency graph for identified security issues."""
-    print("[1/5] GreenPR: Scanning dependency graph for security vulnerabilities...")
+    print("[GreenPR Radar] Scanning dependency graph for security vulnerabilities...")
     cmd = "osv-scanner --format=json -r ."
     
     try:
@@ -218,7 +219,7 @@ def run_vulnerability_radar() -> List[Dict]:
 
 def extract_migration_plan(package_name: str, current_ver: str, target_ver: str, changelog_text: str) -> MigrationPlan:
     """Analyzes version upgrade requirements into structured transformation schema."""
-    print(f"[2/5] GreenPR: Analyzing interface migration requirements ({current_ver} -> {target_ver})...")
+    print(f"  [1/4] Analyzing interface migration requirements ({current_ver} -> {target_ver})...")
     
     prompt = (
         f"Analyze the following upgrade information for {package_name} from {current_ver} to {target_ver}. "
@@ -402,31 +403,39 @@ def _attempt_file_patch(filepath: str, error_trace: str, vuln: Dict, plan: Migra
 
     return False
 
-def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_test_cmd: Optional[str]) -> bool:
+def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_test_cmd: Optional[str], verbose: bool = False) -> bool:
     """Applies package upgrade and enforces deterministic verification gates with 100% native healing."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
     
-    print(f"\n[3/5] GreenPR: Applying updates to package manifest ({pkg} -> {target_ver})...")
+    print(f"  [2/4] Applying package update to manifest ({pkg} -> {target_ver})...")
     bump_cmd_str = profile["bump_cmd"](pkg, target_ver)
     try:
-        subprocess.run(bump_cmd_str, check=True, shell=True)
+        if verbose:
+            subprocess.run(bump_cmd_str, check=True, shell=True)
+        else:
+            proc = subprocess.run(bump_cmd_str, capture_output=True, text=False, shell=True)
+            if proc.returncode != 0:
+                print(f"  [ERROR] Failed to update package manifest: {proc.stderr.decode('utf-8', errors='replace')}")
+                return False
     except subprocess.CalledProcessError as e:
-        print(f"[ERROR] Failed to update package manifest: {e}")
+        print(f"  [ERROR] Failed to update package manifest: {e}")
         return False
 
     test_command = custom_test_cmd or profile["default_test"]
 
     # Step A: Baseline gate check
-    print(f"[4/5] GreenPR: Running verification gate (`{test_command}`)...")
+    print(f"  [3/4] Running verification gate (`{test_command}`)...")
+    gate_t0 = time.time()
     initial_test = subprocess.run(test_command, capture_output=True, text=False, shell=True)
+    gate_dur = time.time() - gate_t0
     if initial_test.returncode == 0:
-        print(f"[GATE PASSED] Verification successful (Exit Code 0). Zero breaking changes detected.")
+        print(f"  [GATE PASSED] Verification successful in {gate_dur:.1f}s (Exit Code 0). Zero breaking changes detected.")
         return True
 
     # Step B: Interface discrepancies detected; initiate proprietary native healing
     error_output = (initial_test.stdout or b'').decode('utf-8', errors='replace') + '\n' + (initial_test.stderr or b'').decode('utf-8', errors='replace')
-    print(f"[HEALING] Interface discrepancies detected in {pkg}. Launching automated remediation...")
+    print(f"  [HEALING] Interface discrepancies detected in {pkg}. Launching automated remediation...")
 
     target_files = _extract_failing_files(error_output)
     if not target_files:
@@ -469,8 +478,84 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
 
 
 # ==============================================================================
-# 7. GreenPR Verified Delivery Pipeline
+# 7. GreenPR Verified Delivery & Reporting Pipeline
 # ==============================================================================
+
+def _format_duration(seconds: float) -> str:
+    """Formats seconds into readable human-friendly time string."""
+    s = int(round(seconds))
+    mins, secs = divmod(s, 60)
+    hrs, mins = divmod(mins, 60)
+    if hrs > 0:
+        return f"{hrs}h {mins}m {secs}s"
+    elif mins > 0:
+        return f"{mins}m {secs}s"
+    else:
+        return f"{secs}s"
+
+def render_progress_bar(current_idx: int, total: int, elapsed_sec: float, bar_width: int = 22) -> str:
+    """Renders high-visibility progress bar with percentage, elapsed time, and ETA."""
+    if total <= 0:
+        return ""
+    pct = (current_idx / total) * 100
+    filled = int(round(bar_width * current_idx / total))
+    filled = max(0, min(bar_width, filled))
+    bar = "█" * filled + "░" * (bar_width - filled)
+    
+    elapsed_str = _format_duration(elapsed_sec)
+    remaining_pkgs = total - current_idx
+    
+    if current_idx > 0 and remaining_pkgs > 0:
+        avg_per_pkg = elapsed_sec / current_idx
+        eta_sec = avg_per_pkg * remaining_pkgs
+        eta_str = f"ETA: ~{_format_duration(eta_sec)}"
+    elif remaining_pkgs == 0:
+        eta_str = "Complete"
+    else:
+        eta_str = "ETA: calculating..."
+    
+    rem_label = f"{remaining_pkgs} left" if remaining_pkgs > 0 else "0 left"
+    return f"[{bar}] {pct:>5.1f}% | {current_idx}/{total} packages | Elapsed: {elapsed_str} | {eta_str} ({rem_label})"
+
+def _render_preflight(packages: List[Dict]):
+    """Renders clean pre-flight target table before remediation begins."""
+    print("\n" + "─" * 80)
+    print("  GreenPR Vulnerability Radar : Remediation Targets")
+    print("─" * 80)
+    print(f"  {'#':<3} {'Package':<30} {'Current':<14} {'Target':<14} {'Advisory'}")
+    print("  " + "─" * 76)
+    for i, p in enumerate(packages, 1):
+        pkg_name = (p['package'][:27] + '...') if len(p['package']) > 30 else p['package']
+        cur_v = p.get('current_version') or 'current'
+        tgt_v = p['target_version']
+        cve = p.get('cve_id') or 'SECURITY'
+        print(f"  {i:<3} {pkg_name:<30} {cur_v:<14} {tgt_v:<14} {cve}")
+    print("─" * 80)
+    print(f"  Total: {len(packages)} package(s) queued for verified remediation.\n")
+
+def _render_summary_table(results: List[Dict], total_elapsed: float, skip_pr: bool):
+    """Renders executive-grade summary table at the completion of all runs."""
+    print("\n" + "=" * 80)
+    print(" " * 27 + "GreenPR Remediation Summary")
+    print("=" * 80)
+    print(f"  {'#':<3} {'Package':<30} {'From':<12} {'To':<12} {'Status':<14} {'Duration'}")
+    print("  " + "─" * 76)
+    for i, r in enumerate(results, 1):
+        status_icon = "✓ Verified" if r["status"] == "SUCCESS" else "✗ Rolled Back"
+        pkg_name = (r['package'][:27] + '...') if len(r['package']) > 30 else r['package']
+        print(f"  {i:<3} {pkg_name:<30} {r['from']:<12} {r['to']:<12} {status_icon:<14} {r['duration']:.1f}s")
+    print("  " + "─" * 76)
+    
+    success_count = sum(1 for r in results if r["status"] == "SUCCESS")
+    failed_count = len(results) - success_count
+    pct = (success_count / len(results) * 100) if results else 0
+    
+    print(f"  Target Packages:    {len(results)}")
+    print(f"  Verified & Safe:    {success_count} ({pct:.1f}%)")
+    print(f"  Rolled Back (Fail): {failed_count}")
+    print(f"  Total Duration:     {_format_duration(total_elapsed)}")
+    print(f"  Delivery Mode:      {'Local Branch Staged (--skip-pr)' if skip_pr else 'Pull Requests Published to GitHub'}")
+    print("=" * 80 + "\n")
 
 def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) -> bool:
     """Submits a verified Pull Request through the delivery pipeline."""
@@ -480,10 +565,10 @@ def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) 
     branch_name = f"greenpr/{pkg}-{target_ver}"
 
     if skip_pr:
-        print(f"[LOCAL RUN] Verified changes staged locally on current branch.")
+        print(f"  [4/4] Verified changes staged locally on current branch.")
         return True
 
-    print(f"[5/5] GreenPR: Publishing verified Pull Request ({branch_name})...")
+    print(f"  [4/4] Publishing verified Pull Request ({branch_name})...")
     subprocess.run(f"git checkout -b {branch_name}", shell=True)
     subprocess.run("git add .", shell=True)
     subprocess.run(f'git commit -m "fix(security): auto-remediate {pkg} to {target_ver} [{cve}]"', shell=True)
@@ -519,6 +604,7 @@ def main():
     parser.add_argument("--target-version", type=str, default=None, help="Target version for specific package")
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of packages to remediate")
     parser.add_argument("--skip-pr", action="store_true", help="Stage changes locally without pushing a remote PR")
+    parser.add_argument("--verbose", action="store_true", help="Display full verbose package manager output")
     args = parser.parse_args()
 
     profile = detect_language()
@@ -526,7 +612,7 @@ def main():
         print("[ERROR] GreenPR: Unsupported project environment.")
         sys.exit(1)
 
-    print(f"[GreenPR] Detected {profile['name']} Environment")
+    print(f"\n[GreenPR] Project Profile: {profile['name']}")
 
     if args.package and args.target_version:
         vulnerabilities = [{
@@ -553,15 +639,59 @@ def main():
     if args.limit:
         deduped = deduped[:args.limit]
 
-    print(f"[GreenPR] Targeting {len(deduped)} package(s) for verified remediation.")
-    for vuln in deduped:
-        plan = extract_migration_plan(vuln["package"], vuln.get("current_version", ""), vuln["target_version"], vuln.get("summary", ""))
-        success = execute_remediation(profile, vuln, plan, args.test_cmd)
+    total_pkgs = len(deduped)
+    _render_preflight(deduped)
+
+    start_total_time = time.time()
+    results = []
+
+    for idx, vuln in enumerate(deduped, 1):
+        pkg = vuln["package"]
+        cur = vuln.get("current_version", "current")
+        tgt = vuln["target_version"]
+        remaining = total_pkgs - idx
+        rem_label = f"{remaining} package{'s' if remaining != 1 else ''} left" if remaining > 0 else "final package"
+
+        elapsed_so_far = time.time() - start_total_time
+        bar_str = render_progress_bar(idx - 1, total_pkgs, elapsed_so_far)
+
+        print("=" * 80)
+        print(f" {bar_str}")
+        print(f" 📦 Package {idx}/{total_pkgs} : {pkg} ({cur} ➔ {tgt})")
+        print("=" * 80)
+
+        pkg_start = time.time()
+        plan = extract_migration_plan(pkg, cur, tgt, vuln.get("summary", ""))
+        success = execute_remediation(profile, vuln, plan, args.test_cmd, verbose=args.verbose)
+        pkg_dur = time.time() - pkg_start
+
         if success:
             create_pull_request(vuln, plan, skip_pr=args.skip_pr)
-            print(f"[GreenPR] Successfully verified remediation for {vuln['package']}.")
+            print(f"✓ [Package {idx}/{total_pkgs}] Verified and safe in {pkg_dur:.1f}s ({rem_label}).")
+            results.append({
+                "package": pkg,
+                "from": cur,
+                "to": tgt,
+                "status": "SUCCESS",
+                "duration": pkg_dur
+            })
         else:
-            print(f"[GreenPR] Remediation rolled back for {vuln['package']} due to failing test gate.")
+            print(f"✗ [Package {idx}/{total_pkgs}] Remediation rolled back for {pkg} in {pkg_dur:.1f}s ({rem_label}).")
+            results.append({
+                "package": pkg,
+                "from": cur,
+                "to": tgt,
+                "status": "FAILED",
+                "duration": pkg_dur
+            })
+
+    total_time = time.time() - start_total_time
+    final_bar = render_progress_bar(total_pkgs, total_pkgs, total_time)
+    print("\n" + "=" * 80)
+    print(f" {final_bar}")
+    print("=" * 80)
+    
+    _render_summary_table(results, total_time, args.skip_pr)
 
 if __name__ == "__main__":
     main()
