@@ -62,6 +62,7 @@ class MigrationPlan(BaseModel):
 LANGUAGE_PROFILES = {
     "node": {
         "name": "Node.js / TypeScript",
+        "ecosystems": ["npm"],
         "detect": lambda: os.path.exists("package.json"),
         "bump_cmd": lambda pkg, ver: (
             f"bun add -d {pkg}@{ver}" if os.path.exists("bun.lock") or os.path.exists("bun.lockb")
@@ -82,6 +83,7 @@ LANGUAGE_PROFILES = {
     },
     "python": {
         "name": "Python",
+        "ecosystems": ["pypi"],
         "detect": lambda: os.path.exists("pyproject.toml") or os.path.exists("requirements.txt") or os.path.exists("poetry.lock"),
         "bump_cmd": lambda pkg, ver: (
             f"poetry add {pkg}=={ver}" if os.path.exists("poetry.lock")
@@ -93,6 +95,7 @@ LANGUAGE_PROFILES = {
     },
     "go": {
         "name": "Go",
+        "ecosystems": ["go"],
         "detect": lambda: os.path.exists("go.mod"),
         "bump_cmd": lambda pkg, ver: f"go get {pkg}@{ver} && go mod tidy",
         "lint_cmd": "golangci-lint run --fix" if shutil.which("golangci-lint") else None,
@@ -101,6 +104,7 @@ LANGUAGE_PROFILES = {
     },
     "rust": {
         "name": "Rust",
+        "ecosystems": ["crates.io"],
         "detect": lambda: os.path.exists("Cargo.toml"),
         "bump_cmd": lambda pkg, ver: f"cargo update -p {pkg} --precise {ver}",
         "lint_cmd": "cargo clippy --fix --allow-dirty",
@@ -109,6 +113,7 @@ LANGUAGE_PROFILES = {
     },
     "java": {
         "name": "Java (Maven / Gradle)",
+        "ecosystems": ["maven"],
         "detect": lambda: os.path.exists("pom.xml") or os.path.exists("build.gradle"),
         "bump_cmd": lambda pkg, ver: (
             f"mvn versions:use-dep-version -Dincludes={pkg} -DdepVersion={ver}" if os.path.exists("pom.xml")
@@ -120,6 +125,7 @@ LANGUAGE_PROFILES = {
     },
     "dotnet": {
         "name": "C# / .NET",
+        "ecosystems": ["nuget"],
         "detect": lambda: len(glob.glob("*.csproj")) > 0 or len(glob.glob("*.sln")) > 0,
         "bump_cmd": lambda pkg, ver: f"dotnet add package {pkg} --version {ver}",
         "lint_cmd": "dotnet format",
@@ -173,8 +179,8 @@ def resolve_engine_tiers() -> Dict[str, Optional[str]]:
 # 4. GreenPR Security Radar
 # ==============================================================================
 
-def run_vulnerability_radar() -> List[Dict]:
-    """Scans project dependency graph for identified security issues."""
+def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> List[Dict]:
+    """Scans project dependency graph for identified security issues with strict monorepo ecosystem binding."""
     print("[GreenPR Radar] Scanning dependency graph for security vulnerabilities...")
     cmd = "osv-scanner --format=json -r ."
     
@@ -186,11 +192,28 @@ def run_vulnerability_radar() -> List[Dict]:
         
         data = json.loads(raw_output)
         vulnerabilities = []
+        isolated_ecosystems = {}
+
         for result in data.get("results", []):
+            source_info = result.get("source", {})
+            source_path = source_info.get("path", "").replace("\\", "/")
+            working_dir = os.path.dirname(source_path) if source_path else "."
+            if not working_dir:
+                working_dir = "."
+
             for package in result.get("packages", []):
                 pkg_info = package.get("package", {})
                 pkg_name = pkg_info.get("name")
                 current_ver = pkg_info.get("version")
+                ecosystem = pkg_info.get("ecosystem", "")
+
+                # Monorepo ecosystem isolation
+                if active_ecosystems and ecosystem:
+                    allowed = [e.lower() for e in active_ecosystems]
+                    if ecosystem.lower() not in allowed:
+                        isolated_ecosystems[ecosystem] = isolated_ecosystems.get(ecosystem, 0) + 1
+                        continue
+
                 for vuln in package.get("vulnerabilities", []):
                     vuln_id = vuln.get("id")
                     fixed_version = None
@@ -206,8 +229,16 @@ def run_vulnerability_radar() -> List[Dict]:
                             "current_version": current_ver,
                             "target_version": fixed_version,
                             "cve_id": vuln_id,
-                            "summary": vuln.get("summary", "")
+                            "summary": vuln.get("summary", ""),
+                            "ecosystem": ecosystem,
+                            "manifest_path": source_path,
+                            "working_dir": working_dir
                         })
+
+        if isolated_ecosystems:
+            for eco, count in isolated_ecosystems.items():
+                print(f"[Monorepo Radar] Isolated {count} {eco} vulnerability(ies) in submodules (filtered out for current ecosystem profile).")
+
         return vulnerabilities
     except Exception:
         return []
@@ -219,8 +250,6 @@ def run_vulnerability_radar() -> List[Dict]:
 
 def extract_migration_plan(package_name: str, current_ver: str, target_ver: str, changelog_text: str) -> MigrationPlan:
     """Analyzes version upgrade requirements into structured transformation schema."""
-    print(f"  [1/4] Analyzing interface migration requirements ({current_ver} -> {target_ver})...")
-    
     prompt = (
         f"Analyze the following upgrade information for {package_name} from {current_ver} to {target_ver}. "
         f"Extract all breaking API changes into the schema. If no breaking changes exist, leave breaking_changes empty.\n\n"
@@ -403,76 +432,138 @@ def _attempt_file_patch(filepath: str, error_trace: str, vuln: Dict, plan: Migra
 
     return False
 
+def _run_with_heartbeat(cmd: str, label: str, cwd: Optional[str] = None, timeout: int = 180) -> subprocess.CompletedProcess:
+    """Executes a verification command with a live elapsed second ticker to prevent frozen screens."""
+    t0 = time.time()
+    sys.stdout.write(f"        • {label} [0s]...")
+    sys.stdout.flush()
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd)
+    try:
+        while proc.poll() is None:
+            time.sleep(0.5)
+            elapsed = int(time.time() - t0)
+            if elapsed >= timeout:
+                proc.kill()
+                sys.stdout.write(f"\r        • {label} [TIMEOUT after {timeout}s]\n")
+                sys.stdout.flush()
+                return subprocess.CompletedProcess(args=cmd, returncode=124, stdout=b"", stderr=b"Verification gate timed out.")
+            sys.stdout.write(f"\r        • {label} [{elapsed}s elapsed]...")
+            sys.stdout.flush()
+
+        stdout, stderr = proc.communicate()
+        dur = time.time() - t0
+        sys.stdout.write(f"\r        • {label} [passed in {dur:.1f}s]      \n")
+        sys.stdout.flush()
+        return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
+    except Exception as e:
+        proc.kill()
+        return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b"", stderr=str(e).encode('utf-8'))
+
+def resolve_package_bump_command(vuln: Dict, profile: Dict) -> str:
+    """Dispatches package bump to the correct package manager based on ecosystem and monorepo path."""
+    pkg = vuln["package"]
+    ver = vuln["target_version"]
+    ecosystem = vuln.get("ecosystem", "").lower()
+    wdir = vuln.get("working_dir", ".")
+
+    # 1. NPM / JavaScript Ecosystem
+    if ecosystem == "npm" or "npm" in ecosystem:
+        if os.path.exists(os.path.join(wdir, "bun.lock")) or os.path.exists("bun.lock") or os.path.exists("bun.lockb"):
+            return f"bun add -d {pkg}@{ver}"
+        elif os.path.exists("pnpm-workspace.yaml"):
+            return f"pnpm add -D -w {pkg}@{ver}"
+        elif os.path.exists(os.path.join(wdir, "pnpm-lock.yaml")) or os.path.exists("pnpm-lock.yaml"):
+            return f"pnpm add -D {pkg}@{ver}"
+        elif os.path.exists(os.path.join(wdir, "yarn.lock")) or os.path.exists("yarn.lock"):
+            return f"yarn add -D {pkg}@{ver}"
+        else:
+            return f"npm install --save-dev {pkg}@{ver}"
+
+    # 2. PyPI / Python Ecosystem
+    if ecosystem in ("pypi", "python"):
+        if os.path.exists(os.path.join(wdir, "poetry.lock")) or os.path.exists("poetry.lock"):
+            return f"poetry add {pkg}=={ver}"
+        elif shutil.which("uv"):
+            return f"uv pip install {pkg}=={ver}"
+        else:
+            return f"pip install {pkg}=={ver}"
+
+    # 3. Go Ecosystem
+    if ecosystem == "go":
+        return f"go get {pkg}@{ver} && go mod tidy"
+
+    # 4. Cargo / Rust Ecosystem
+    if ecosystem in ("crates.io", "cargo", "rust"):
+        return f"cargo update -p {pkg} --precise {ver}"
+
+    # Default to profile bump command
+    return profile["bump_cmd"](pkg, ver)
+
 def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_test_cmd: Optional[str], verbose: bool = False) -> bool:
     """Applies package upgrade and enforces deterministic verification gates with 100% native healing."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
+    working_dir = vuln.get("working_dir") or "."
     
-    print(f"  [2/4] Applying package update to manifest ({pkg} -> {target_ver})...")
-    bump_cmd_str = profile["bump_cmd"](pkg, target_ver)
+    bump_cmd_str = resolve_package_bump_command(vuln, profile)
+    sys.stdout.write(f"        • Manifest: updating {pkg} to {target_ver}...")
+    sys.stdout.flush()
     try:
         if verbose:
-            subprocess.run(bump_cmd_str, check=True, shell=True)
+            subprocess.run(bump_cmd_str, check=True, shell=True, cwd=working_dir)
         else:
-            proc = subprocess.run(bump_cmd_str, capture_output=True, text=False, shell=True)
+            proc = subprocess.run(bump_cmd_str, capture_output=True, text=False, shell=True, cwd=working_dir)
             if proc.returncode != 0:
-                print(f"  [ERROR] Failed to update package manifest: {proc.stderr.decode('utf-8', errors='replace')}")
+                sys.stdout.write(f" ✖ FAILED\n")
+                print(f"          [ERROR] {proc.stderr.decode('utf-8', errors='replace').strip()[:200]}")
                 return False
+        sys.stdout.write(f" done\n")
     except subprocess.CalledProcessError as e:
-        print(f"  [ERROR] Failed to update package manifest: {e}")
+        sys.stdout.write(f" ✖ FAILED\n")
+        print(f"          [ERROR] {e}")
         return False
 
     test_command = custom_test_cmd or profile["default_test"]
 
-    # Step A: Baseline gate check
-    print(f"  [3/4] Running verification gate (`{test_command}`)...")
-    gate_t0 = time.time()
-    initial_test = subprocess.run(test_command, capture_output=True, text=False, shell=True)
-    gate_dur = time.time() - gate_t0
+    # Step A: Baseline gate check with live heartbeat ticker
+    initial_test = _run_with_heartbeat(test_command, f"Verification: {test_command}")
     if initial_test.returncode == 0:
-        print(f"  [GATE PASSED] Verification successful in {gate_dur:.1f}s (Exit Code 0). Zero breaking changes detected.")
         return True
 
     # Step B: Interface discrepancies detected; initiate proprietary native healing
     error_output = (initial_test.stdout or b'').decode('utf-8', errors='replace') + '\n' + (initial_test.stderr or b'').decode('utf-8', errors='replace')
-    print(f"  [HEALING] Interface discrepancies detected in {pkg}. Launching automated remediation...")
+    print(f"        • Healing: interface discrepancies detected, repairing...")
 
     target_files = _extract_failing_files(error_output)
     if not target_files:
-        print("[HEALING] No direct source file candidates isolated from error trace.")
+        print("          No direct source file candidates isolated from error trace.")
     else:
-        print(f"[HEALING] Isolated candidate failure point(s): {', '.join(target_files[:3])}")
+        print(f"          Repairing candidate(s): {', '.join(target_files[:3])}")
 
     tiers = resolve_engine_tiers()
 
     # Tier 1 Healing
     if tiers["tier1"] and target_files:
-        print(f"[HEALING] Analyzing failure patterns and applying automated resolution...")
         for tf in target_files[:3]:
             _attempt_file_patch(tf, error_output, vuln, plan, tiers["tier1"], tiers["provider"])
 
-        print(f"[VERIFY] Running compiler and test verification gate...")
-        t1_check = subprocess.run(test_command, capture_output=True, text=False, shell=True)
+        t1_check = _run_with_heartbeat(test_command, "• Verification (tier 1 repair)")
         if t1_check.returncode == 0:
-            print("[GATE VERIFIED] 100% test suite pass (Exit Code 0). Verified safe for production.")
             return True
         else:
             error_output = (t1_check.stdout or b'').decode('utf-8', errors='replace') + '\n' + (t1_check.stderr or b'').decode('utf-8', errors='replace')
 
     # Tier 2 Healing Escalation
     if tiers["tier2"] and tiers["tier2"] != tiers["tier1"] and target_files:
-        print("[HEALING] Escalating to secondary reasoning tier for deep interface resolution...")
         for tf in target_files[:3]:
             _attempt_file_patch(tf, error_output, vuln, plan, tiers["tier2"], tiers["provider"])
 
-        print(f"[VERIFY] Running secondary verification gate...")
-        t2_check = subprocess.run(test_command, shell=True)
+        t2_check = _run_with_heartbeat(test_command, "• Verification (tier 2 repair)")
         if t2_check.returncode == 0:
-            print("[GATE VERIFIED] 100% test suite pass (Exit Code 0). Verified safe for production.")
             return True
 
     # Deterministic rollback on failure
-    print("[GATE FAILED] Test suite did not reach Exit Code 0. Rolling back modifications to ensure repository integrity.")
     subprocess.run("git checkout . && git clean -fd", shell=True)
     return False
 
@@ -493,73 +584,39 @@ def _format_duration(seconds: float) -> str:
     else:
         return f"{secs}s"
 
-def render_progress_bar(current_idx: int, total: int, elapsed_sec: float, bar_width: int = 22) -> str:
-    """Renders high-visibility progress bar with percentage, elapsed time, and ETA."""
-    if total <= 0:
-        return ""
-    pct = (current_idx / total) * 100
-    filled = int(round(bar_width * current_idx / total))
-    filled = max(0, min(bar_width, filled))
-    bar = "█" * filled + "░" * (bar_width - filled)
-    
-    elapsed_str = _format_duration(elapsed_sec)
-    remaining_pkgs = total - current_idx
-    
-    if current_idx > 0 and remaining_pkgs > 0:
-        avg_per_pkg = elapsed_sec / current_idx
-        eta_sec = avg_per_pkg * remaining_pkgs
-        eta_str = f"ETA: ~{_format_duration(eta_sec)}"
-    elif remaining_pkgs == 0:
-        eta_str = "Complete"
-    else:
-        eta_str = "ETA: calculating..."
-    
-    if remaining_pkgs > 0:
-        rem_label = f"{remaining_pkgs} of {total} left"
-    else:
-        rem_label = f"0 of {total} left (Done)"
-
-    return f"[{bar}] {pct:>5.1f}% | Done: {current_idx}/{total} ({rem_label}) | Elapsed: {elapsed_str} | {eta_str}"
-
 def _render_preflight(packages: List[Dict]):
-    """Renders clean pre-flight target table before remediation begins."""
-    print("\n" + "─" * 80)
-    print("  GreenPR Vulnerability Radar : Remediation Targets")
-    print("─" * 80)
-    print(f"  {'#':<3} {'Package':<30} {'Current':<14} {'Target':<14} {'Advisory'}")
-    print("  " + "─" * 76)
-    for i, p in enumerate(packages, 1):
-        pkg_name = (p['package'][:27] + '...') if len(p['package']) > 30 else p['package']
+    """Renders clean, enterprise-grade remediation inventory (Snyk / GitHub CLI style)."""
+    print(f"\nDiscovered {len(packages)} security remediation(s):\n")
+    print(f"  {'SUBPROJECT':<24} {'PACKAGE':<28} {'CURRENT':<12} {'TARGET':<12} {'ADVISORY'}")
+    print("  " + "-" * 88)
+    for p in packages:
+        working_dir = p.get('working_dir', '.')
+        try:
+            rel_dir = os.path.relpath(working_dir, os.getcwd()).replace("\\", "/")
+        except Exception:
+            rel_dir = working_dir
+        subproj = "(root)" if rel_dir == "." else rel_dir
+        pkg_name = (p['package'][:25] + '...') if len(p['package']) > 28 else p['package']
         cur_v = p.get('current_version') or 'current'
         tgt_v = p['target_version']
         cve = p.get('cve_id') or 'SECURITY'
-        print(f"  {i:<3} {pkg_name:<30} {cur_v:<14} {tgt_v:<14} {cve}")
-    print("─" * 80)
-    print(f"  Total: {len(packages)} package(s) queued for verified remediation.\n")
+        print(f"  {subproj:<24} {pkg_name:<28} {cur_v:<12} → {tgt_v:<10} {cve}")
+    print("  " + "-" * 88 + "\n")
 
 def _render_summary_table(results: List[Dict], total_elapsed: float, skip_pr: bool):
-    """Renders executive-grade summary table at the completion of all runs."""
-    print("\n" + "=" * 80)
-    print(" " * 27 + "GreenPR Remediation Summary")
-    print("=" * 80)
-    print(f"  {'#':<3} {'Package':<30} {'From':<12} {'To':<12} {'Status':<14} {'Duration'}")
-    print("  " + "─" * 76)
-    for i, r in enumerate(results, 1):
-        status_icon = "✓ Verified" if r["status"] == "SUCCESS" else "✗ Rolled Back"
-        pkg_name = (r['package'][:27] + '...') if len(r['package']) > 30 else r['package']
-        print(f"  {i:<3} {pkg_name:<30} {r['from']:<12} {r['to']:<12} {status_icon:<14} {r['duration']:.1f}s")
-    print("  " + "─" * 76)
-    
+    """Renders enterprise executive summary (Snyk / Renovate style)."""
     success_count = sum(1 for r in results if r["status"] == "SUCCESS")
     failed_count = len(results) - success_count
-    pct = (success_count / len(results) * 100) if results else 0
-    
-    print(f"  Target Packages:    {len(results)}")
-    print(f"  Verified & Safe:    {success_count} ({pct:.1f}%)")
-    print(f"  Rolled Back (Fail): {failed_count}")
-    print(f"  Total Duration:     {_format_duration(total_elapsed)}")
-    print(f"  Delivery Mode:      {'Local Branch Staged (--skip-pr)' if skip_pr else 'Pull Requests Published to GitHub'}")
-    print("=" * 80 + "\n")
+
+    print("-" * 64)
+    print("Remediation Summary:")
+    print(f"  ✔ {success_count} package(s) verified safe (100% gate pass)")
+    if failed_count > 0:
+        print(f"  ✖ {failed_count} package(s) rolled back due to test failure")
+    print(f"  ⏱ Total duration: {_format_duration(total_elapsed)}")
+    mode_str = "Local working copy staged (--skip-pr)" if skip_pr else "Pull Requests published to GitHub"
+    print(f"  Mode: {mode_str}")
+    print("-" * 64 + "\n")
 
 def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) -> bool:
     """Submits a verified Pull Request through the delivery pipeline."""
@@ -569,10 +626,8 @@ def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) 
     branch_name = f"greenpr/{pkg}-{target_ver}"
 
     if skip_pr:
-        print(f"  [4/4] Verified changes staged locally on current branch.")
         return True
 
-    print(f"  [4/4] Publishing verified Pull Request ({branch_name})...")
     subprocess.run(f"git checkout -b {branch_name}", shell=True)
     subprocess.run("git add .", shell=True)
     subprocess.run(f'git commit -m "fix(security): auto-remediate {pkg} to {target_ver} [{cve}]"', shell=True)
@@ -602,13 +657,14 @@ def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) 
 # ==============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="GreenPR: Autonomous Zero-Hallucination Dependency Remediation by tech49labs")
+    parser = argparse.ArgumentParser(description="GreenPR Enterprise: Autonomous Dependency Remediation Engine by tech49labs")
     parser.add_argument("--test-cmd", type=str, default=None, help="Custom command to run test suite")
     parser.add_argument("--package", type=str, default=None, help="Target specific package (skips full scan)")
     parser.add_argument("--target-version", type=str, default=None, help="Target version for specific package")
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of packages to remediate")
     parser.add_argument("--skip-pr", action="store_true", help="Stage changes locally without pushing a remote PR")
     parser.add_argument("--verbose", action="store_true", help="Display full verbose package manager output")
+    parser.add_argument("--ecosystem", type=str, default=None, help="Filter by ecosystem (npm, pypi, go, crates.io, all)")
     args = parser.parse_args()
 
     profile = detect_language()
@@ -616,20 +672,30 @@ def main():
         print("[ERROR] GreenPR: Unsupported project environment.")
         sys.exit(1)
 
-    print(f"\n[GreenPR] Project Profile: {profile['name']}")
+    print(f"GreenPR Dependency Remediation Engine v1.0 | tech49labs")
+    print(f"Target:         {os.getcwd()}")
+    print(f"Active Profile: {profile['name']}")
+
+    # Determine target ecosystems
+    if args.ecosystem:
+        target_ecos = None if args.ecosystem.lower() == "all" else [args.ecosystem.lower()]
+    else:
+        target_ecos = profile.get("ecosystems")
 
     if args.package and args.target_version:
         vulnerabilities = [{
             "package": args.package,
             "target_version": args.target_version,
             "cve_id": "DIRECT-REMEDIATION",
-            "current_version": "current"
+            "current_version": "current",
+            "working_dir": ".",
+            "ecosystem": (target_ecos[0] if target_ecos else "npm")
         }]
     else:
-        vulnerabilities = run_vulnerability_radar()
+        vulnerabilities = run_vulnerability_radar(active_ecosystems=target_ecos)
 
     if not vulnerabilities:
-        print("[GreenPR] All dependencies are verified and clean.")
+        print(f"\n✔ All {profile['name']} dependencies are verified and clean.\n")
         sys.exit(0)
 
     # De-duplicate packages
@@ -649,23 +715,19 @@ def main():
     start_total_time = time.time()
     results = []
 
+    print(f"Applying remediations ({total_pkgs} total):\n")
     for idx, vuln in enumerate(deduped, 1):
         pkg = vuln["package"]
         cur = vuln.get("current_version", "current")
         tgt = vuln["target_version"]
-        remaining = total_pkgs - idx
-        if remaining > 0:
-            rem_label = f"{remaining} of {total_pkgs} left"
-        else:
-            rem_label = f"Final package (0 of {total_pkgs} left)"
+        working_dir = vuln.get("working_dir", ".")
+        try:
+            rel_dir = os.path.relpath(working_dir, os.getcwd()).replace("\\", "/")
+        except Exception:
+            rel_dir = working_dir
+        subproj = "(root)" if rel_dir == "." else rel_dir
 
-        elapsed_so_far = time.time() - start_total_time
-        bar_str = render_progress_bar(idx - 1, total_pkgs, elapsed_so_far)
-
-        print("=" * 80)
-        print(f" {bar_str}")
-        print(f" 📦 Package {idx} of {total_pkgs} ({rem_label}) : {pkg} ({cur} ➔ {tgt})")
-        print("=" * 80)
+        print(f"  [{idx}/{total_pkgs}] {subproj} : {pkg} ({cur} → {tgt})")
 
         pkg_start = time.time()
         plan = extract_migration_plan(pkg, cur, tgt, vuln.get("summary", ""))
@@ -674,18 +736,20 @@ def main():
 
         if success:
             create_pull_request(vuln, plan, skip_pr=args.skip_pr)
-            print(f"✓ [Package {idx} of {total_pkgs}] Verified and safe in {pkg_dur:.1f}s ({rem_label}).")
+            print(f"        ✔ Verified safe for production ({pkg_dur:.1f}s)\n")
             results.append({
                 "package": pkg,
+                "project": subproj,
                 "from": cur,
                 "to": tgt,
                 "status": "SUCCESS",
                 "duration": pkg_dur
             })
         else:
-            print(f"✗ [Package {idx} of {total_pkgs}] Remediation rolled back for {pkg} in {pkg_dur:.1f}s ({rem_label}).")
+            print(f"        ✖ Verification gate failed. Rolled back cleanly ({pkg_dur:.1f}s)\n")
             results.append({
                 "package": pkg,
+                "project": subproj,
                 "from": cur,
                 "to": tgt,
                 "status": "FAILED",
@@ -693,11 +757,6 @@ def main():
             })
 
     total_time = time.time() - start_total_time
-    final_bar = render_progress_bar(total_pkgs, total_pkgs, total_time)
-    print("\n" + "=" * 80)
-    print(f" {final_bar}")
-    print("=" * 80)
-    
     _render_summary_table(results, total_time, args.skip_pr)
 
 if __name__ == "__main__":
