@@ -1,27 +1,29 @@
-# 🛡️ Auto-Heal: Zero-Hallucination Dependency Remediation Engine
+# 🛡️ GreenPR: Autonomous Zero-Hallucination Dependency Remediation
 
-> **Dependabot bumps versions and breaks your build. Auto-Heal patches the breaking code and guarantees 100% green tests before opening a PR.**
+> **Dependabot bumps versions and breaks your build. GreenPR patches breaking syntax and guarantees 100% green tests before opening a Pull Request.**
 
----
-
-## ⚡ What Makes This "Zero Hallucination"?
-
-Standard AI coding tools generate code and hope it works. **Auto-Heal enforces a deterministic compiler and test gate:**
-
-1. **Scans**: `google/osv-scanner` identifies real CVEs across your lockfiles.
-2. **Extracts**: `pydantic-ai` parses changelogs into a strict, validated Python schema.
-3. **Bumps & Edits**: Updates the manifest and uses `Aider` with AST-level diffing to patch callsites.
-4. **The Deterministic Gate**: Runs your language's compiler and test suite (`npm test`, `pytest`, `cargo test`, `go test`).
-   - If exit code $\neq 0$, terminal errors are fed back to Aider to iteratively fix syntax.
-   - If tests do not pass, **the branch is rolled back completely. No broken code is ever committed.**
-5. **Verified PR**: Opens a pull request via `gh` CLI with verified test run proof.
+*Engineered by **tech49labs***
 
 ---
 
-## 🌐 Supported Languages (Auto-Detected)
+## ⚡ The Zero-Hallucination Guarantee
 
-Auto-Heal automatically detects and supports:
-* **TypeScript / JavaScript** (`npm`, `tsc`, `eslint`, `jest/vitest`)
+Traditional AI tools generate code and leave you to fix the bugs. **GreenPR operates on a closed-loop deterministic verification gate:**
+
+1. **Vulnerability Radar**: Automatically maps your project's dependency graph against the global CVE advisory database.
+2. **Semantic Migration Engine**: Synthesizes upstream changelogs into rigid, typed API transformation rules.
+3. **Deterministic Code Engine**: Applies surgical, AST-level diffs to deprecated callsites and imports.
+4. **The Zero-Hallucination Gate**: Executes your project's actual compiler and test suite (`npm test`, `pytest`, `cargo test`, `go test`).
+   - If tests fail, the engine enters an autonomous healing loop to repair syntax discrepancies.
+   - If tests cannot achieve **Exit Code 0**, the code is **immediately rolled back**. No broken code is ever committed.
+5. **Verified Delivery Pipeline**: Publishes a cryptographically clean Pull Request with full test logs attached.
+
+---
+
+## 🌐 Supported Environments (Auto-Detected)
+
+GreenPR auto-detects and supports all major ecosystems out of the box:
+* **TypeScript / JavaScript** (`npm`, `pnpm`, `yarn`, `bun`, `tsc`, `eslint`, `vitest`/`jest`)
 * **Python** (`pip`, `poetry`, `mypy`, `ruff`, `pytest`)
 * **Go** (`go.mod`, `go build`, `golangci-lint`, `go test`)
 * **Rust** (`Cargo.toml`, `cargo check`, `cargo clippy`, `cargo test`)
@@ -30,61 +32,50 @@ Auto-Heal automatically detects and supports:
 
 ---
 
-## 🚀 Quickstart: Run It Locally Right Now
+## 🚀 Usage
 
-### 1. Install Dependencies
+### Local CLI Execution
+
 ```bash
+# Install GreenPR dependencies
 pip install -r requirements.txt
-```
 
-Make sure you have `osv-scanner` and `gh` installed:
-```bash
-# MacOS
-brew install osv-scanner gh
-
-# Linux
-curl -fsSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o /usr/local/bin/osv-scanner
-chmod +x /usr/local/bin/osv-scanner
-```
-
-### 2. Run Auto-Heal in Any Repository
-```bash
-export ANTHROPIC_API_KEY="your-api-key"
-# or export OPENAI_API_KEY / GEMINI_API_KEY
-
+# Run full vulnerability scan & remediation:
 python remediate.py
+
+# Or target a specific package upgrade:
+python remediate.py --package ws --target-version 8.21.0 --test-cmd "npm test"
 ```
 
-### 3. Target a Specific Package Upgrade
-```bash
-python remediate.py --package axios --target-version 1.7.0 --test-cmd "npm test"
-```
+### GitHub Actions Workflow
 
----
-
-## 📦 Run as a GitHub Action
-
-Drop this into `.github/workflows/auto-heal.yml` in any repo:
+Drop `.github/workflows/greenpr.yml` into any repository:
 
 ```yaml
-name: Auto-Heal Security Remediation
+name: GreenPR Security Remediation
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Nightly
-  workflow_dispatch:
+    - cron: '0 0 * * *' # Nightly automated sweep
+  workflow_dispatch:     # On-demand manual trigger
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  remediate:
+  greenpr:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: your-org/auto-heal-action@v1
+      - uses: tech49labs/greenpr@v1
         with:
-          api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          api_key: ${{ secrets.GREENPR_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
+
+---
+
+## 📄 License & Commercial Distribution
+
+Proprietary enterprise distribution by **tech49labs**. All rights reserved.

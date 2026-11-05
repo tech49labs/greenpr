@@ -1,6 +1,6 @@
-name: 'Auto-Heal Zero-Hallucination Dependency Remediation'
-description: 'Autonomously detects CVEs, updates breaking dependencies, fixes code syntax, and only submits PRs if tests pass with exit code 0.'
-author: 'Auto-Heal'
+name: 'GreenPR: Autonomous Zero-Hallucination Dependency Remediation'
+description: 'Detects CVEs, repairs breaking changes, and guarantees 100% test pass (Exit Code 0) before opening Pull Requests.'
+author: 'tech49labs'
 
 inputs:
   test_cmd:
@@ -8,7 +8,7 @@ inputs:
     required: false
     default: ''
   api_key:
-    description: 'OpenAI, Anthropic, or Gemini API Key for Aider and Pydantic-AI'
+    description: 'GreenPR Engine API Key (Anthropic, OpenAI, or Gemini)'
     required: true
   github_token:
     description: 'GitHub token with contents:write and pull-requests:write permissions'
@@ -18,23 +18,20 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Set up Python
+    - name: Set up Python Runtime
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    - name: Install OSV-Scanner and Auto-Heal Dependencies
+    - name: Initialize GreenPR Core Components
       shell: bash
       run: |
-        # Install OSV-Scanner binary
         curl -fsSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o /usr/local/bin/osv-scanner || true
         chmod +x /usr/local/bin/osv-scanner || true
-        
-        # Install Python dependencies and Aider
         pip install --upgrade pip
         pip install -r ${{ github.action_path }}/requirements.txt
 
-    - name: Run Auto-Heal Remediation Pipeline
+    - name: Execute GreenPR Remediation Engine
       shell: bash
       env:
         ANTHROPIC_API_KEY: ${{ inputs.api_key }}

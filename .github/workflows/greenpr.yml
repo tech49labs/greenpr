@@ -1,0 +1,25 @@
+name: GreenPR Security Remediation
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  greenpr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run GreenPR Engine
+        uses: ./
+        with:
+          api_key: ${{ secrets.GREENPR_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
