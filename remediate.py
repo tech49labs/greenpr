@@ -302,6 +302,7 @@ def main():
     parser.add_argument("--test-cmd", type=str, default=None, help="Custom command to run test suite")
     parser.add_argument("--package", type=str, default=None, help="Target specific package (skips full scan)")
     parser.add_argument("--target-version", type=str, default=None, help="Target version for specific package")
+    parser.add_argument("--limit", type=int, default=None, help="Maximum number of packages to remediate")
     parser.add_argument("--skip-pr", action="store_true", help="Stage changes locally without pushing a remote PR")
     args = parser.parse_args()
 
@@ -333,6 +334,9 @@ def main():
         if v["package"] not in seen_packages:
             seen_packages.add(v["package"])
             deduped.append(v)
+
+    if args.limit:
+        deduped = deduped[:args.limit]
 
     print(f"Targeting {len(deduped)} unique package(s) to remediate.")
     for vuln in deduped:
