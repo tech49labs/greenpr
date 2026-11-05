@@ -581,7 +581,10 @@ def _run_with_heartbeat(cmd: str, label: str, cwd: Optional[str] = None, timeout
 
         stdout, stderr = proc.communicate()
         dur = time.time() - t0
-        sys.stdout.write(f"\r        • {label} [passed in {dur:.1f}s]      \n")
+        if proc.returncode == 0:
+            sys.stdout.write(f"\r        • {label} [passed in {dur:.1f}s]      \n")
+        else:
+            sys.stdout.write(f"\r        • {label} [failed in {dur:.1f}s]      \n")
         sys.stdout.flush()
         return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
     except Exception as e:
