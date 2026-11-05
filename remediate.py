@@ -514,8 +514,12 @@ def render_progress_bar(current_idx: int, total: int, elapsed_sec: float, bar_wi
     else:
         eta_str = "ETA: calculating..."
     
-    rem_label = f"{remaining_pkgs} left" if remaining_pkgs > 0 else "0 left"
-    return f"[{bar}] {pct:>5.1f}% | {current_idx}/{total} packages | Elapsed: {elapsed_str} | {eta_str} ({rem_label})"
+    if remaining_pkgs > 0:
+        rem_label = f"{remaining_pkgs} of {total} left"
+    else:
+        rem_label = f"0 of {total} left (Done)"
+
+    return f"[{bar}] {pct:>5.1f}% | Done: {current_idx}/{total} ({rem_label}) | Elapsed: {elapsed_str} | {eta_str}"
 
 def _render_preflight(packages: List[Dict]):
     """Renders clean pre-flight target table before remediation begins."""
@@ -650,14 +654,17 @@ def main():
         cur = vuln.get("current_version", "current")
         tgt = vuln["target_version"]
         remaining = total_pkgs - idx
-        rem_label = f"{remaining} package{'s' if remaining != 1 else ''} left" if remaining > 0 else "final package"
+        if remaining > 0:
+            rem_label = f"{remaining} of {total_pkgs} left"
+        else:
+            rem_label = f"Final package (0 of {total_pkgs} left)"
 
         elapsed_so_far = time.time() - start_total_time
         bar_str = render_progress_bar(idx - 1, total_pkgs, elapsed_so_far)
 
         print("=" * 80)
         print(f" {bar_str}")
-        print(f" 📦 Package {idx}/{total_pkgs} : {pkg} ({cur} ➔ {tgt})")
+        print(f" 📦 Package {idx} of {total_pkgs} ({rem_label}) : {pkg} ({cur} ➔ {tgt})")
         print("=" * 80)
 
         pkg_start = time.time()
@@ -667,7 +674,7 @@ def main():
 
         if success:
             create_pull_request(vuln, plan, skip_pr=args.skip_pr)
-            print(f"✓ [Package {idx}/{total_pkgs}] Verified and safe in {pkg_dur:.1f}s ({rem_label}).")
+            print(f"✓ [Package {idx} of {total_pkgs}] Verified and safe in {pkg_dur:.1f}s ({rem_label}).")
             results.append({
                 "package": pkg,
                 "from": cur,
@@ -676,7 +683,7 @@ def main():
                 "duration": pkg_dur
             })
         else:
-            print(f"✗ [Package {idx}/{total_pkgs}] Remediation rolled back for {pkg} in {pkg_dur:.1f}s ({rem_label}).")
+            print(f"✗ [Package {idx} of {total_pkgs}] Remediation rolled back for {pkg} in {pkg_dur:.1f}s ({rem_label}).")
             results.append({
                 "package": pkg,
                 "from": cur,
