@@ -12,6 +12,12 @@ import os
 import shutil
 import subprocess
 import sys
+
+# Ensure UTF-8 output on Windows consoles
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
