@@ -39,10 +39,18 @@ LANGUAGE_PROFILES = {
     "node": {
         "name": "Node.js / TypeScript",
         "detect": lambda: os.path.exists("package.json"),
-        "bump_cmd": lambda pkg, ver: ["npm", "install", f"{pkg}@{ver}", "--save"],
+        "bump_cmd": lambda pkg, ver: (
+            ["pnpm", "add", f"{pkg}@{ver}"] if os.path.exists("pnpm-lock.yaml")
+            else ["yarn", "add", f"{pkg}@{ver}"] if os.path.exists("yarn.lock")
+            else ["npm", "install", f"{pkg}@{ver}", "--save"]
+        ),
         "lint_cmd": "npx eslint . --fix" if os.path.exists(".eslintrc.json") or os.path.exists("eslint.config.js") else None,
         "compile_cmd": "npx tsc --noEmit" if os.path.exists("tsconfig.json") else None,
-        "default_test": "npm test",
+        "default_test": (
+            "pnpm test" if os.path.exists("pnpm-lock.yaml")
+            else "yarn test" if os.path.exists("yarn.lock")
+            else "npm test"
+        ),
     },
     "python": {
         "name": "Python",
