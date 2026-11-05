@@ -12,8 +12,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from packaging import version
 from pydantic import BaseModel, Field
 
@@ -182,22 +183,130 @@ def discover_repository_profiles(root_dir: str = ".") -> List[Dict]:
 
     return found
 
+def _kill_process_tree(pid: int):
+    """Cleanly terminates a process and all of its spawned child processes across platforms."""
+    if sys.platform == "win32":
+        try:
+            subprocess.run(f"taskkill /F /T /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    else:
+        try:
+            import signal
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except Exception:
+            try:
+                import signal
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+def locate_package_owner(pkg_name: str, repo_root: str = ".") -> Tuple[str, str, bool, Optional[str], Optional[str]]:
+    """
+    Intelligently inspects repository manifests across workspaces to isolate which project
+    actually declares a dependency.
+    Returns: (owner_dir, display_name, is_direct, dep_type, declared_version)
+    """
+    found = []
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in ('node_modules', '.git', 'dist', 'build', '.next', '__pycache__', 'target', 'vendor', '.venv', 'venv')]
+        if 'package.json' in files:
+            pj_path = os.path.join(root, 'package.json')
+            try:
+                with open(pj_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                name = data.get('name') or os.path.relpath(root, repo_root).replace('\\', '/')
+                if name == ".":
+                    name = "(root)"
+                deps = data.get('dependencies', {})
+                dev_deps = data.get('devDependencies', {})
+                peer_deps = data.get('peerDependencies', {})
+                if pkg_name in deps:
+                    found.append((root, name, True, 'dependencies', deps[pkg_name]))
+                elif pkg_name in dev_deps:
+                    found.append((root, name, True, 'devDependencies', dev_deps[pkg_name]))
+                elif pkg_name in peer_deps:
+                    found.append((root, name, True, 'peerDependencies', peer_deps[pkg_name]))
+            except Exception:
+                pass
+    if found:
+        # Prefer specific subproject over root if declared in subproject
+        non_roots = [f for f in found if f[0] != repo_root and f[0] not in (".", "")]
+        return non_roots[0] if non_roots else found[0]
+
+    return (repo_root, "(transitive)", False, None, None)
+
+def probe_and_select_verification_gate(repo_root: str = ".", custom_cmd: Optional[str] = None) -> Tuple[Optional[str], float]:
+    """
+    Executes a pre-flight sanity check on the pristine repository BEFORE touching any code.
+    Probes candidate gates in order of reliability to discard broken or hanging commands.
+    """
+    print("[GreenPR Baseline] Probing repository verification gates on clean branch...")
+    candidates = []
+    if custom_cmd:
+        candidates.append(custom_cmd)
+
+    pj_path = os.path.join(repo_root, "package.json")
+    if os.path.exists(pj_path):
+        try:
+            with open(pj_path, "r", encoding="utf-8") as f:
+                pj = json.load(f)
+            scripts = pj.get("scripts", {})
+            pkg_mgr = "bun" if os.path.exists(os.path.join(repo_root, "bun.lock")) else \
+                      "pnpm" if os.path.exists(os.path.join(repo_root, "pnpm-lock.yaml")) else \
+                      "yarn" if os.path.exists(os.path.join(repo_root, "yarn.lock")) else "npm"
+
+            # Functional test suites are highest fidelity
+            if "test" in scripts:
+                candidates.append(f"{pkg_mgr} test")
+            if "test:unit" in scripts:
+                candidates.append(f"{pkg_mgr} run test:unit")
+            if "test:ci" in scripts:
+                candidates.append(f"{pkg_mgr} run test:ci")
+            # Compilers / Typecheckers
+            if "typecheck" in scripts:
+                candidates.append(f"{pkg_mgr} run typecheck" if pkg_mgr == "npm" else f"{pkg_mgr} typecheck")
+            if "build" in scripts:
+                candidates.append(f"{pkg_mgr} run build" if pkg_mgr == "npm" else f"{pkg_mgr} build")
+        except Exception:
+            pass
+
+    prof = get_profile_for_dir(repo_root)
+    if prof and prof.get("default_test") and prof["default_test"] not in candidates:
+        candidates.append(prof["default_test"])
+
+    # Probe each candidate using tempfiles to avoid OS pipe deadlock
+    probe_timeout = 60
+    for cmd in candidates:
+        sys.stdout.write(f"  • Probing gate: {cmd}...")
+        sys.stdout.flush()
+        t0 = time.time()
+        try:
+            with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
+                proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True, cwd=repo_root)
+                while proc.poll() is None:
+                    time.sleep(0.5)
+                    if time.time() - t0 > probe_timeout:
+                        _kill_process_tree(proc.pid)
+                        sys.stdout.write(f" [TIMEOUT >{probe_timeout}s - rejected]\n")
+                        break
+                else:
+                    dur = time.time() - t0
+                    if proc.returncode == 0:
+                        sys.stdout.write(f" [PASSED in {dur:.1f}s]\n")
+                        print(f"[GreenPR Baseline] Verified passing gate: '{cmd}' (exit 0 in {dur:.1f}s)\n")
+                        return cmd, dur
+                    else:
+                        sys.stdout.write(f" [FAILED exit {proc.returncode} in {dur:.1f}s - rejected]\n")
+        except Exception as e:
+            sys.stdout.write(f" [ERROR: {e}]\n")
+
+    return None, 0.0
+
 def resolve_subproject_test_cmd(working_dir: str, custom_test_cmd: Optional[str] = None) -> str:
     """Intelligently detects or applies the verification command for a subproject directory."""
-    sub_profile = get_profile_for_dir(working_dir)
-    
     if custom_test_cmd:
-        if working_dir in (".", ""):
-            return custom_test_cmd
-        
-        is_python_cmd = any(k in custom_test_cmd for k in ["pytest", "python", "unittest"])
-        is_node_cmd = any(k in custom_test_cmd for k in ["pnpm", "npm", "yarn", "bun", "tsc", "vitest", "jest"])
-        
-        sub_is_python = sub_profile and sub_profile["name"] == "Python"
-        sub_is_node = sub_profile and "Node" in sub_profile["name"]
-        
-        if (is_python_cmd and sub_is_python) or (is_node_cmd and sub_is_node):
-            return custom_test_cmd
+        return custom_test_cmd
 
     pkg_json = os.path.join(working_dir, "package.json")
     if os.path.exists(pkg_json):
@@ -209,19 +318,19 @@ def resolve_subproject_test_cmd(working_dir: str, custom_test_cmd: Optional[str]
                       "pnpm" if os.path.exists(os.path.join(working_dir, "pnpm-lock.yaml")) or os.path.exists("pnpm-lock.yaml") or os.path.exists("pnpm-workspace.yaml") else \
                       "yarn" if os.path.exists(os.path.join(working_dir, "yarn.lock")) else "npm"
             
-            if "typecheck" in scripts:
-                return f"{pkg_mgr} run typecheck" if pkg_mgr == "npm" else f"{pkg_mgr} typecheck"
-            elif "test" in scripts:
+            if "test" in scripts:
                 return f"{pkg_mgr} test"
+            elif "typecheck" in scripts:
+                return f"{pkg_mgr} run typecheck" if pkg_mgr == "npm" else f"{pkg_mgr} typecheck"
             elif os.path.exists(os.path.join(working_dir, "tsconfig.json")):
                 return "npx tsc --noEmit"
         except Exception:
             pass
 
+    sub_profile = get_profile_for_dir(working_dir)
     if sub_profile:
         return sub_profile.get("default_test", "pytest")
     return "pytest"
-
 
 # ==============================================================================
 # 3. Model-Agnostic Engine Resolver
@@ -361,15 +470,20 @@ def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> Li
                 primary_vuln = vuln_list[0] if vuln_list else {}
                 vuln_id = primary_vuln.get("id", "SECURITY")
 
+                owner_dir, subproj, is_direct, dep_type, decl_ver = locate_package_owner(pkg_name, ".")
+
                 vulnerabilities.append({
                     "package": pkg_name,
-                    "current_version": current_ver,
+                    "current_version": decl_ver or current_ver,
                     "target_version": target_version,
                     "cve_id": vuln_id,
                     "summary": primary_vuln.get("summary", ""),
                     "ecosystem": ecosystem,
                     "manifest_path": source_path,
-                    "working_dir": working_dir
+                    "working_dir": owner_dir,
+                    "subproject": subproj,
+                    "is_direct": is_direct,
+                    "dep_type": dep_type
                 })
 
         return vulnerabilities
@@ -561,92 +675,152 @@ def _attempt_file_patch(filepath: str, error_trace: str, vuln: Dict, plan: Migra
     return False
 
 def _run_with_heartbeat(cmd: str, label: str, cwd: Optional[str] = None, timeout: int = 180) -> subprocess.CompletedProcess:
-    """Executes a verification command with a live elapsed second ticker to prevent frozen screens."""
+    """
+    Executes a verification command with temporary file I/O to prevent 64KB OS pipe buffer deadlocks,
+    paired with live heartbeat ticks and tree-wide process termination on timeout.
+    """
     t0 = time.time()
     sys.stdout.write(f"        • {label} [0s]...")
     sys.stdout.flush()
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, cwd=cwd)
     try:
-        while proc.poll() is None:
-            time.sleep(0.5)
-            elapsed = int(time.time() - t0)
-            if elapsed >= timeout:
-                proc.kill()
-                sys.stdout.write(f"\r        • {label} [TIMEOUT after {timeout}s]\n")
+        with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
+            proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True, cwd=cwd)
+            while proc.poll() is None:
+                time.sleep(0.5)
+                elapsed = int(time.time() - t0)
+                if elapsed >= timeout:
+                    _kill_process_tree(proc.pid)
+                    sys.stdout.write(f"\r        • {label} [TIMEOUT after {timeout}s]\n")
+                    sys.stdout.flush()
+                    return subprocess.CompletedProcess(args=cmd, returncode=124, stdout=b"", stderr=b"Verification gate timed out.")
+                sys.stdout.write(f"\r        • {label} [{elapsed}s elapsed]...")
                 sys.stdout.flush()
-                return subprocess.CompletedProcess(args=cmd, returncode=124, stdout=b"", stderr=b"Verification gate timed out.")
-            sys.stdout.write(f"\r        • {label} [{elapsed}s elapsed]...")
-            sys.stdout.flush()
 
-        stdout, stderr = proc.communicate()
-        dur = time.time() - t0
-        if proc.returncode == 0:
-            sys.stdout.write(f"\r        • {label} [passed in {dur:.1f}s]      \n")
-        else:
-            sys.stdout.write(f"\r        • {label} [failed in {dur:.1f}s]      \n")
-        sys.stdout.flush()
-        return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
+            dur = time.time() - t0
+            out_f.seek(0)
+            err_f.seek(0)
+            stdout = out_f.read()
+            stderr = err_f.read()
+
+            if proc.returncode == 0:
+                sys.stdout.write(f"\r        • {label} [passed in {dur:.1f}s]      \n")
+            else:
+                sys.stdout.write(f"\r        • {label} [failed in {dur:.1f}s]      \n")
+            sys.stdout.flush()
+            return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
     except Exception as e:
-        proc.kill()
         return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b"", stderr=str(e).encode('utf-8'))
 
-def resolve_package_bump_command(vuln: Dict, profile: Dict) -> str:
-    """Dispatches package bump to the correct package manager based on ecosystem and monorepo path."""
+def resolve_package_bump_command(vuln: Dict, profile: Dict) -> Tuple[str, str]:
+    """
+    Dispatches package bump to the correct package manager and working directory.
+    Returns: (command_string, working_directory)
+    """
     pkg = vuln["package"]
     ver = vuln["target_version"]
     ecosystem = vuln.get("ecosystem", "").lower()
     wdir = vuln.get("working_dir", ".")
+    is_direct = vuln.get("is_direct", True)
+    subproject = vuln.get("subproject", "(root)")
+    dep_type = vuln.get("dep_type", "dependencies")
 
     # 1. NPM / JavaScript Ecosystem
     if ecosystem == "npm" or "npm" in ecosystem:
-        if os.path.exists(os.path.join(wdir, "bun.lock")) or os.path.exists(os.path.join(wdir, "bun.lockb")):
-            return f"bun add -d {pkg}@{ver}"
-        elif os.path.exists("pnpm-workspace.yaml") or os.path.exists(os.path.join(wdir, "pnpm-workspace.yaml")):
-            if wdir not in (".", ""):
-                return f"pnpm add -D {pkg}@{ver}"
-            return f"pnpm add -D -w {pkg}@{ver}"
-        elif os.path.exists(os.path.join(wdir, "pnpm-lock.yaml")) or os.path.exists("pnpm-lock.yaml"):
-            return f"pnpm add -D {pkg}@{ver}"
-        elif os.path.exists(os.path.join(wdir, "yarn.lock")) or os.path.exists("yarn.lock"):
-            return f"yarn add -D {pkg}@{ver}"
-        else:
-            return f"npm install --save-dev {pkg}@{ver}"
+        # A. Direct dependency declared in workspace or root: update manifest + lockfile-only sync
+        if is_direct:
+            target_pj = os.path.join(wdir, "package.json") if wdir not in (".", "") else "package.json"
+            if os.path.exists(target_pj):
+                try:
+                    with open(target_pj, "r", encoding="utf-8") as f:
+                        pj = json.load(f)
+                    section = dep_type if dep_type in pj else ("devDependencies" if "devDependencies" in pj and pkg in pj.get("devDependencies", {}) else "dependencies")
+                    if section not in pj:
+                        pj[section] = {}
+
+                    orig = pj[section].get(pkg, "")
+                    prefix = "^" if orig.startswith("^") else ("~" if orig.startswith("~") else "")
+                    pj[section][pkg] = f"{prefix}{ver}"
+
+                    with open(target_pj, "w", encoding="utf-8") as f:
+                        json.dump(pj, f, indent=2)
+
+                    if os.path.exists("pnpm-lock.yaml") or os.path.exists("pnpm-workspace.yaml"):
+                        return "pnpm install --lockfile-only", "."
+                    elif os.path.exists("yarn.lock"):
+                        return "yarn install", "."
+                    elif os.path.exists("bun.lock") or os.path.exists("bun.lockb"):
+                        return "bun install", "."
+                    else:
+                        return "npm install --package-lock-only", "."
+                except Exception:
+                    pass
+
+        # B. Transitive dependency: Apply native overrides/resolutions to root manifest + lockfile-only sync
+        if os.path.exists("package.json"):
+            try:
+                with open("package.json", "r", encoding="utf-8") as f:
+                    pj = json.load(f)
+                if os.path.exists("pnpm-lock.yaml") or os.path.exists("pnpm-workspace.yaml"):
+                    if "pnpm" not in pj:
+                        pj["pnpm"] = {}
+                    if "overrides" not in pj["pnpm"]:
+                        pj["pnpm"]["overrides"] = {}
+                    pj["pnpm"]["overrides"][pkg] = ver
+                    with open("package.json", "w", encoding="utf-8") as f:
+                        json.dump(pj, f, indent=2)
+                    return "pnpm install --lockfile-only", "."
+                elif os.path.exists("yarn.lock"):
+                    if "resolutions" not in pj:
+                        pj["resolutions"] = {}
+                    pj["resolutions"][pkg] = ver
+                    with open("package.json", "w", encoding="utf-8") as f:
+                        json.dump(pj, f, indent=2)
+                    return "yarn install", "."
+                else:
+                    if "overrides" not in pj:
+                        pj["overrides"] = {}
+                    pj["overrides"][pkg] = ver
+                    with open("package.json", "w", encoding="utf-8") as f:
+                        json.dump(pj, f, indent=2)
+                    return "npm install --package-lock-only", "."
+            except Exception:
+                pass
+
+        return f"npm install --save-dev {pkg}@{ver}", "." 
 
     # 2. PyPI / Python Ecosystem
     if ecosystem in ("pypi", "python"):
         if os.path.exists(os.path.join(wdir, "poetry.lock")) or os.path.exists("poetry.lock"):
-            return f"poetry add {pkg}=={ver}"
+            return f"poetry add {pkg}=={ver}", wdir
         elif shutil.which("uv"):
-            return f"uv pip install {pkg}=={ver}"
+            return f"uv pip install {pkg}=={ver}", wdir
         else:
-            return f"pip install {pkg}=={ver}"
+            return f"pip install {pkg}=={ver}", wdir
 
     # 3. Go Ecosystem
     if ecosystem == "go":
-        return f"go get {pkg}@{ver} && go mod tidy"
+        return f"go get {pkg}@{ver} && go mod tidy", wdir
 
     # 4. Cargo / Rust Ecosystem
     if ecosystem in ("crates.io", "cargo", "rust"):
-        return f"cargo update -p {pkg} --precise {ver}"
+        return f"cargo update -p {pkg} --precise {ver}", wdir
 
-    return profile["bump_cmd"](pkg, ver, wdir)
+    return profile["bump_cmd"](pkg, ver, wdir), wdir
 
-def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_test_cmd: Optional[str], verbose: bool = False) -> bool:
+def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified_gate: str, baseline_dur: float = 30.0, verbose: bool = False) -> bool:
     """Applies package upgrade and enforces deterministic verification gates with 100% native healing."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
-    working_dir = vuln.get("working_dir") or "."
-    sub_profile = get_profile_for_dir(working_dir) or profile
     
-    bump_cmd_str = resolve_package_bump_command(vuln, sub_profile)
+    bump_cmd_str, target_cwd = resolve_package_bump_command(vuln, profile)
     sys.stdout.write(f"        • Manifest: updating {pkg} to {target_ver}...")
     sys.stdout.flush()
     try:
         if verbose:
-            subprocess.run(bump_cmd_str, check=True, shell=True, cwd=working_dir)
+            subprocess.run(bump_cmd_str, check=True, shell=True, cwd=target_cwd)
         else:
-            proc = subprocess.run(bump_cmd_str, capture_output=True, text=False, shell=True, cwd=working_dir)
+            proc = subprocess.run(bump_cmd_str, capture_output=True, text=False, shell=True, cwd=target_cwd)
             if proc.returncode != 0:
                 sys.stdout.write(f" ✖ FAILED\n")
                 err_msg = proc.stderr.decode('utf-8', errors='replace').strip()[:200]
@@ -658,17 +832,26 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         print(f"          [ERROR] {e}")
         return False
 
-    test_command = resolve_subproject_test_cmd(working_dir, custom_test_cmd)
+    # Dynamic verification timeout based on baseline duration
+    gate_timeout = max(90, int(baseline_dur * 2.5))
 
-    # Step A: Baseline gate check with live heartbeat ticker
-    initial_test = _run_with_heartbeat(test_command, f"Verification: {test_command}", cwd=working_dir)
+    # Step A: Verified gate check with live heartbeat ticker
+    initial_test = _run_with_heartbeat(verified_gate, f"Verification: {verified_gate}", timeout=gate_timeout)
     if initial_test.returncode == 0:
         return True
     elif initial_test.returncode == 124:
-        print(f"        ✖ Verification gate timed out (>180s). Rolled back cleanly.")
+        print(f"        ✖ Verification gate timed out (>{gate_timeout}s). Rolled back cleanly.")
         subprocess.run("git checkout .", shell=True)
         subprocess.run("git clean -ffd", shell=True, input=b"n\n")
         return False
+
+    # Print error summary for zero-hallucination transparency
+    err_preview = (initial_test.stderr or initial_test.stdout or b'').decode('utf-8', errors='replace').strip()
+    first_lines = [l for l in err_preview.splitlines() if l.strip()][:3]
+    if first_lines:
+        print("          Verification failure trace:")
+        for line in first_lines:
+            print(f"            {line[:120]}")
 
     # Step B: Interface discrepancies detected; initiate proprietary native healing
     error_output = (initial_test.stdout or b'').decode('utf-8', errors='replace') + '\n' + (initial_test.stderr or b'').decode('utf-8', errors='replace')
@@ -687,7 +870,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         for tf in target_files[:3]:
             _attempt_file_patch(tf, error_output, vuln, plan, tiers["tier1"], tiers["provider"])
 
-        t1_check = _run_with_heartbeat(test_command, "Verification (tier 1 repair)", cwd=working_dir)
+        t1_check = _run_with_heartbeat(verified_gate, "Verification (tier 1 repair)", timeout=gate_timeout)
         if t1_check.returncode == 0:
             return True
         else:
@@ -698,7 +881,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
         for tf in target_files[:3]:
             _attempt_file_patch(tf, error_output, vuln, plan, tiers["tier2"], tiers["provider"])
 
-        t2_check = _run_with_heartbeat(test_command, "Verification (tier 2 repair)", cwd=working_dir)
+        t2_check = _run_with_heartbeat(verified_gate, "Verification (tier 2 repair)", timeout=gate_timeout)
         if t2_check.returncode == 0:
             return True
 
@@ -706,11 +889,6 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
     subprocess.run("git checkout .", shell=True)
     subprocess.run("git clean -ffd", shell=True, input=b"n\n")
     return False
-
-
-# ==============================================================================
-# 7. GreenPR Verified Delivery & Reporting Pipeline
-# ==============================================================================
 
 def _format_duration(seconds: float) -> str:
     """Formats seconds into readable human-friendly time string."""
@@ -730,12 +908,7 @@ def _render_preflight(packages: List[Dict]):
     print(f"  {'SUBPROJECT':<24} {'PACKAGE':<28} {'CURRENT':<12} {'TARGET':<12} {'ADVISORY'}")
     print("  " + "-" * 88)
     for p in packages:
-        working_dir = p.get('working_dir', '.')
-        try:
-            rel_dir = os.path.relpath(working_dir, os.getcwd()).replace("\\", "/")
-        except Exception:
-            rel_dir = working_dir
-        subproj = "(root)" if rel_dir == "." else rel_dir
+        subproj = p.get('subproject') or '(root)'
         pkg_name = (p['package'][:25] + '...') if len(p['package']) > 28 else p['package']
         cur_v = p.get('current_version') or 'current'
         tgt_v = p['target_version']
@@ -803,6 +976,7 @@ def main():
     parser.add_argument("--target-version", type=str, default=None, help="Target version for specific package")
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of packages to remediate")
     parser.add_argument("--skip-pr", action="store_true", help="Stage changes locally without pushing a remote PR")
+    parser.add_argument("--dry-run", "--scan-only", dest="dry_run", action="store_true", help="Scan and display discovered vulnerabilities without modifying files")
     parser.add_argument("--verbose", action="store_true", help="Display full verbose package manager output")
     parser.add_argument("--ecosystem", type=str, default=None, help="Filter by ecosystem (npm, pypi, go, crates.io, all)")
     args = parser.parse_args()
@@ -823,23 +997,34 @@ def main():
     print(f"Target:         {os.getcwd()}")
     print(f"Active Profile: {profile_label}")
 
+    # Step 0: Autonomous Baseline Sanity Gate Check (Mandatory Pre-flight)
+    verified_gate, baseline_dur = probe_and_select_verification_gate(".", custom_cmd=args.test_cmd)
+    if not verified_gate:
+        print("\n[ERROR] GreenPR: Cannot proceed. No passing verification gates found on clean repository.")
+        print("GreenPR guarantees zero-hallucination PRs by verifying updates against a passing gate.")
+        print("Please resolve baseline test/typecheck failures on your branch before running remediation.\n")
+        sys.exit(1)
+
     # Determine target ecosystems
     if args.ecosystem:
         target_ecos = None if args.ecosystem.lower() == "all" else [args.ecosystem.lower()]
     else:
-        # Default in monorepo: scan all detected ecosystems
         if len(profiles) > 1:
             target_ecos = None
         else:
             target_ecos = primary_profile.get("ecosystems")
 
     if args.package and args.target_version:
+        owner_dir, subproj, is_direct, dep_type, decl_ver = locate_package_owner(args.package, ".")
         vulnerabilities = [{
             "package": args.package,
             "target_version": args.target_version,
             "cve_id": "DIRECT-REMEDIATION",
-            "current_version": "current",
-            "working_dir": ".",
+            "current_version": decl_ver or "current",
+            "working_dir": owner_dir,
+            "subproject": subproj,
+            "is_direct": is_direct,
+            "dep_type": dep_type,
             "ecosystem": (target_ecos[0] if target_ecos else "npm")
         }]
     else:
@@ -853,7 +1038,7 @@ def main():
     seen_keys = set()
     deduped = []
     for v in vulnerabilities:
-        key = (v.get("working_dir", "."), v["package"])
+        key = (v.get("subproject", "(root)"), v["package"])
         if key not in seen_keys:
             seen_keys.add(key)
             deduped.append(v)
@@ -864,6 +1049,10 @@ def main():
     total_pkgs = len(deduped)
     _render_preflight(deduped)
 
+    if args.dry_run:
+        print(f"\n✔ Scan complete ({total_pkgs} vulnerabilities discovered). Dry run mode active: no files modified.\n")
+        sys.exit(0)
+
     start_total_time = time.time()
     results = []
 
@@ -872,18 +1061,13 @@ def main():
         pkg = vuln["package"]
         cur = vuln.get("current_version", "current")
         tgt = vuln["target_version"]
-        working_dir = vuln.get("working_dir", ".")
-        try:
-            rel_dir = os.path.relpath(working_dir, os.getcwd()).replace("\\", "/")
-        except Exception:
-            rel_dir = working_dir
-        subproj = "(root)" if rel_dir == "." else rel_dir
+        subproj = vuln.get("subproject", "(root)")
 
         print(f"  [{idx}/{total_pkgs}] {subproj} : {pkg} ({cur} → {tgt})")
 
         pkg_start = time.time()
         plan = extract_migration_plan(pkg, cur, tgt, vuln.get("summary", ""))
-        success = execute_remediation(primary_profile, vuln, plan, args.test_cmd, verbose=args.verbose)
+        success = execute_remediation(primary_profile, vuln, plan, verified_gate, baseline_dur=baseline_dur, verbose=args.verbose)
         pkg_dur = time.time() - pkg_start
 
         if success:
