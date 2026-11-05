@@ -20,6 +20,22 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
+# On Windows, sync credentials from User Registry so existing sessions inherit active keys
+if sys.platform == "win32":
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as reg_key:
+            for env_var in ["GEMINI_API_KEY", "GREENPR_API_KEY", "ANTHROPIC_API_KEY"]:
+                try:
+                    reg_val, _ = winreg.QueryValueEx(reg_key, env_var)
+                    cur = os.environ.get(env_var, "")
+                    if not cur or cur.startswith("ya29."):
+                        os.environ[env_var] = reg_val
+                except FileNotFoundError:
+                    pass
+    except Exception:
+        pass
+
 # ==============================================================================
 # 1. GreenPR Semantic Protocol Schema
 # ==============================================================================
@@ -294,25 +310,33 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
 
     tiers = resolve_engine_tiers()
 
+    # Isolate environment: If provider is Gemini, suppress any invalid local OpenAI keys
+    run_env = os.environ.copy()
+    if tiers.get("provider") == "gemini" and "OPENAI_API_KEY" in run_env:
+        del run_env["OPENAI_API_KEY"]
+
     def build_healing_cmd(model_name: Optional[str]) -> list:
         cmd = [
             "aider",
             "--no-check-update",
+            "--no-gitignore",
+            "--no-browser",
+            "--yes-always",
+            "--no-auto-commits",
             "--message", f'"{prompt_message}"',
             "--test-cmd", f'"{test_command}"',
             "--auto-test",
-            "--yes-always",
             "--no-git"
         ]
         if model_name:
-            cmd.extend(["--model", model_name])
+            cmd.extend(["--model", model_name, "--weak-model", model_name])
         if lint_command:
             cmd.extend(["--lint-cmd", f'"{lint_command}"', "--auto-lint"])
         return cmd
 
     # Tier 1 Healing
     print(f"[HEALING] Analyzing failure patterns and applying automated resolution...")
-    subprocess.run(" ".join(build_healing_cmd(tiers["tier1"])), shell=True)
+    subprocess.run(" ".join(build_healing_cmd(tiers["tier1"])), env=run_env, shell=True)
 
     print(f"[VERIFY] Running compiler and test verification gate...")
     t1_check = subprocess.run(test_command, shell=True)
@@ -323,7 +347,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, custom_t
     # Tier 2 Healing Escalation
     if tiers["tier2"] and tiers["tier2"] != tiers["tier1"]:
         print("[HEALING] Escalating to secondary reasoning engine for complex interface repair...")
-        subprocess.run(" ".join(build_healing_cmd(tiers["tier2"])), shell=True)
+        subprocess.run(" ".join(build_healing_cmd(tiers["tier2"])), env=run_env, shell=True)
         print(f"[VERIFY] Running secondary verification gate...")
         t2_check = subprocess.run(test_command, shell=True)
         if t2_check.returncode == 0:
