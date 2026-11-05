@@ -500,7 +500,7 @@ def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) 
         f"- **Regression Test Suite**: PASSED (Exit Code 0)\n"
         f"- **Deterministic Verification**: 100% verified against project test harness.\n\n"
         f"---\n"
-        f"*Delivered autonomously by [GreenPR by tech49labs](https://github.com/tech49-labs/greenpr)*\n"
+        f"*Delivered autonomously by [GreenPR by tech49labs](https://github.com/tech49labs/greenpr)*\n"
     )
 
     pr_cmd = f'gh pr create --title "fix(security): GreenPR verified patch for {pkg} to {target_ver}" --body "{body}"'

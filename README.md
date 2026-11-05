@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: tech49-labs/greenpr@v1
+      - uses: tech49labs/greenpr@v1
         with:
           api_key: ${{ secrets.GREENPR_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
