@@ -46,7 +46,8 @@ LANGUAGE_PROFILES = {
         "name": "Node.js / TypeScript",
         "detect": lambda: os.path.exists("package.json"),
         "bump_cmd": lambda pkg, ver: (
-            f"pnpm add -D {pkg}@{ver}" if os.path.exists("pnpm-lock.yaml")
+            f"pnpm add -D -w {pkg}@{ver}" if os.path.exists("pnpm-workspace.yaml")
+            else f"pnpm add -D {pkg}@{ver}" if os.path.exists("pnpm-lock.yaml")
             else f"yarn add -D {pkg}@{ver}" if os.path.exists("yarn.lock")
             else f"npm install --save-dev {pkg}@{ver}"
         ),
