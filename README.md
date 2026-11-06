@@ -7,12 +7,12 @@ verification command before and after the change. Changes run in an isolated
 Git worktree and can be published as a pull request. Your team reviews and merges.
 
 [Website](https://greenpr-cw0.pages.dev/) ·
-[Commercial licensing](https://github.com/tech49labs/greenpr/issues/new/choose)
+[Commercial licensing](https://docs.google.com/forms/d/e/1FAIpQLSd102fTw1I4rqFDYx00odjJO2aLth251H5znuUcI4KAitSokQ/viewform)
 
 ## Release status
 
 See [launch status](LAUNCH.md) for verified release checks and current limits.
-Commercial sales use GitHub request forms, manual invoices, and signed licenses.
+Commercial sales use a private enquiry form, manual follow-up and signed licenses.
 The public website does not require a billing server or customer account.
 
 ## Run locally
@@ -146,14 +146,12 @@ Compute and model-provider usage are separate. Enterprise is a license tier,
 not an uptime, compliance, or accuracy guarantee. Support and deployment
 commitments must be agreed before purchase.
 
-Commercial onboarding starts with a public GitHub request form. Automated checkout is not live.
-[Request Team](https://github.com/tech49labs/greenpr/issues/new?template=team-license.yml) or
-[request Enterprise](https://github.com/tech49labs/greenpr/issues/new?template=enterprise-license.yml).
-Do not include personal information, payment details, private repository names,
-or code in public requests. Requests are assigned to `Mbuso-Harvey` through GitHub
-notifications; delivery depends on the account notification settings. Payment
-and private license delivery are arranged manually after intake. No private
-contact channel is promised by the form.
+Commercial onboarding starts with a [private plan enquiry](https://docs.google.com/forms/d/e/1FAIpQLSd102fTw1I4rqFDYx00odjJO2aLth251H5znuUcI4KAitSokQ/viewform).
+Provide a company name, contact name, email and optional contact details. No
+GreenPR, Google or GitHub sign-in is required to submit it. GreenPR receives a
+private email notification and contacts you directly. The form takes no payment.
+Payment arrangements are handled manually by the owner. Do not submit credentials,
+payment details, private repository links, source code or signed licenses.
 After manual payment confirmation, GreenPR supplies a signed license scoped to
 the purchased repository or GitHub organization and paid period. Set
 `GREENPR_LICENSE_FILE` to that file and use `--commercial`. No billing server is

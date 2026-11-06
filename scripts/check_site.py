@@ -1,12 +1,14 @@
-"""Verify the deployed static artifact and GitHub license-request links."""
+"""Verify the deployed static artifact and private plan-enquiry links."""
 import argparse
 import hashlib
 from html.parser import HTMLParser
 from urllib.error import HTTPError
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, urlopen
 
 from build_site import PUBLIC_FILES, ROOT
+
+ENQUIRY_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSd102fTw1I4rqFDYx00odjJO2aLth251H5znuUcI4KAitSokQ/viewform'
 
 
 class Links(HTMLParser):
@@ -17,8 +19,8 @@ class Links(HTMLParser):
     def handle_starttag(self, tag, attributes):
         href = dict(attributes).get("href", "")
         if tag == "a" and href.startswith("mailto:"):
-            raise AssertionError("Unexpected email link; launch uses GitHub requests")
-        if tag == "a" and href.startswith("https://github.com/tech49labs/greenpr/issues/new"):
+            raise AssertionError("Unexpected email link; the receiving inbox stays private")
+        if tag == "a" and href == ENQUIRY_URL:
             self.requests.append(href)
         if tag == "script":
             raise AssertionError("Public site unexpectedly contains a script")
@@ -47,10 +49,16 @@ def main():
             links = Links()
             links.feed(payload.decode("utf-8"))
             if filename == "index.html":
-                templates = [parse_qs(urlsplit(link).query).get("template", [None])[0] for link in links.requests]
-                assert "team-license.yml" in templates and "enterprise-license.yml" in templates
+                assert len(links.requests) == 2, 'Both paid plans must reach the private enquiry form'
                 assert b"$49" in payload and b"$899" in payload
         print("PASS:", filename)
+    with urlopen(Request(ENQUIRY_URL, headers={"User-Agent": "GreenPR-Release-Check/1.0"}), timeout=30) as response:
+        assert response.status == 200
+        assert urlsplit(response.url).hostname == 'docs.google.com', 'Enquiry unexpectedly requires sign-in'
+        form = response.read().decode('utf-8')
+        for field in ('Request a GreenPR plan', 'Company name', 'Contact name', 'Email address', 'Other contact details', 'Submit'):
+            assert field in form, field
+    print('PASS: published enquiry form available without authentication')
     for path in ("app/", "api/license", "backend/app.py", ".env", "_headers"):
         try:
             urlopen(Request(urljoin(base, path), headers={"User-Agent": "GreenPR-Release-Check/1.0"}), timeout=30).close()

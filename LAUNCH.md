@@ -2,10 +2,34 @@
 
 Status: **published on 2026-11-05 (America/Toronto)** at
 https://greenpr-cw0.pages.dev/. Launch
-scope is free Community download/setup plus paid Team and Enterprise requests
-through free GitHub issue forms. Payment confirmation and signed license delivery
-are manual. No paid mailbox, application server, database, or live checkout is
-required for this launch.
+scope is free Community download/setup plus private paid-plan enquiries. The
+owner receives email notifications and handles customer follow-up and payments.
+There is no checkout, GreenPR customer account or hosted application backend.
+
+## Latest launch verification — November 6, 2026
+
+- Runner release [PR #10](https://github.com/tech49labs/greenpr/pull/10) merged as
+  `55bf92e6a2e425c4cace19a2f9334f5c51432fe3`. Its content passed 112 regression
+  tests on both Windows and Linux. Core dependency updates require no model key;
+  optional BYOK repair uses the chosen provider and explicit model ID. Live AI
+  repair remains experimental.
+- The final runner completed a clean standalone scan/update/verification/rescan/
+  push/generated-PR/review rehearsal in an authorized private fixture. This is
+  separate from the earlier full application evidence recorded below.
+- Paid-plan enquiries now use a private Google Form in the existing operator
+  account: company name, contact name, email, optional contact details and plan.
+  No visitor sign-in is required. Responses are private and the operator inbox
+  is absent from the anonymous public form response.
+- A marked TEST enquiry was accepted and its new-response notification was
+  received in the existing private inbox. No new inbox/account, paid service,
+  payment processing or production customer license was created.
+- The owner handles all payment arrangements. Bank details and payment-process
+  configuration are outside this launch work. The form takes no payment.
+- Public GitHub support remains available for sanitized technical questions;
+  customer contact details must not be posted there.
+
+Earlier publication and regression results below are historical evidence for
+those releases; the latest runner result is the 112-test result above.
 
 Team is USD 49 per repository/month; Enterprise is USD 899 per GitHub
 organization/month. Compute and model-provider usage are separate. GreenPR is
