@@ -40,11 +40,20 @@ def classify_failure(stdout, stderr, returncode, phase='', timed_out=False):
         return 'timeout', 'Command exceeded its time limit. Inspect the retained output and adjust the test or timeout before retrying.'
     if returncode == 0:
         return 'passed', 'Command completed successfully.'
+    if re.search(r'Cannot allocate memory|out of memory|OOMKilled|No space left on device|resource temporarily unavailable|cannot fork', output, re.I):
+        return 'infrastructure_resource', 'Execution infrastructure exhausted a resource. Inspect memory, disk and process limits; restore the local runtime before retrying the unchanged gates.'
+    docker_context = re.search(r'docker|container daemon|container engine', output, re.I)
+    if (re.search(r'Cannot connect to the Docker daemon|error during connect|Error response from daemon|failed to connect to.*(?:docker|containerd)', output, re.I)
+            or docker_context and (returncode == 125 or re.search(r'(?:500 Internal Server Error|HTTP[^\n]*500|returned non-zero exit status 125|request returned.*500)', output, re.I))):
+        return 'infrastructure_runtime', 'The container runtime failed before verification could complete. Check engine health and the retained runtime error, then retry the unchanged gates.'
     if re.search(r'UndefinedValueError|ImproperlyConfigured|environment variable.*(?:missing|required|not set)|(?:SECRET_KEY|DATABASE_URL).*not found|KeyError:\s*[\'"](?:SECRET_KEY|DATABASE_URL)', output, re.I):
         return 'environment_configuration', 'Required application configuration is missing. Supply test-only environment settings in the original environment, then rerun; do not commit secrets.'
     if re.search(r'ModuleNotFoundError|ImportError:|command not found|is not recognized|No module named|No such file or directory', output, re.I):
         return 'environment_dependencies', 'A required dependency, executable, or file is unavailable. Complete repository setup and verify the selected interpreter and command.'
-    if re.search(r'AssertionError|assert .*==|FAILED .*::|failures?=\d*[1-9]|[1-9]\d* failed', output, re.I):
+    test_signal = (r'^\s*(?:E\s+)?AssertionError(?:\s*:|\s*$)|^E\s+assert\s+|'
+                   r'^FAILED\s+\S+::|^\s*(?:=+\s*)?[1-9]\d* failed(?:,|\s+in\b|\s*=)|'
+                   r'^FAILED\s+\((?:failures|errors)=[1-9]\d*[,)]')
+    if re.search(test_signal, output, re.I | re.M):
         return 'test_failure', 'Tests reported failures. Review the retained assertion output and fix the baseline before attempting a dependency update.' if phase == 'baseline' else 'Tests reported failures. Review the retained assertion output before accepting the update.'
     return 'command_failure', 'Command failed. Review the retained stdout/stderr to identify the cause; a nonzero exit alone does not establish a test assertion failure.'
 
@@ -88,5 +97,6 @@ def record_command(command, result, *, phase, duration_seconds):
             file.write('\n')
         receipt['commands'].append(entry.copy())
         if code != 0:
+            receipt.setdefault('first_failure', entry.copy())
             receipt['last_failure'] = entry.copy()
     return {**entry, 'stdout': stdout, 'stderr': stderr}

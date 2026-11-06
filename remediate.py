@@ -670,7 +670,9 @@ def _run_with_heartbeat(cmd: str, label: str, cwd: Optional[str] = None, timeout
     """Execute a full gate and retain safe evidence, including timeout output."""
     from engine.diagnostics import record_command, redact
     started = time.monotonic()
-    phase = phase or ("bootstrap" if "baseline dependenc" in label.lower() else
+    phase = phase or ("cleanup" if "cleanup" in label.lower() else
+                      "setup" if "setup" in label.lower() else
+                      "bootstrap" if "baseline dependenc" in label.lower() else
                       "install" if "install" in label.lower() else "final")
     safe_label = redact(label)
     sys.stdout.write(f"        • {safe_label} [0s]...")
@@ -998,7 +1000,7 @@ def _run_current_checkout(config=None):
     if not verified_gate and not args.dry_run:
         print("\n[ERROR] GreenPR: Cannot proceed. No passing verification gates found on clean repository.")
         print("The selected verification command must pass before updates begin.")
-        print("Please resolve baseline test/typecheck failures on your branch before running remediation.\n")
+        print("Inspect the first failure and retained diagnostic log; resolve the reported setup, runtime, or verification problem before running remediation.\n")
         sys.exit(1)
 
     if not args.dry_run:
