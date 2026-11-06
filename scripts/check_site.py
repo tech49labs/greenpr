@@ -4,7 +4,7 @@ import hashlib
 from html.parser import HTMLParser
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urljoin, urlsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from build_site import PUBLIC_FILES, ROOT
 
@@ -34,7 +34,7 @@ def main():
         if filename == "_headers":
             continue
         path = "" if filename == "index.html" else filename
-        with urlopen(urljoin(base, path), timeout=30) as response:
+        with urlopen(Request(urljoin(base, path), headers={"User-Agent": "GreenPR-Release-Check/1.0"}), timeout=30) as response:
             assert response.status == 200
             assert urlsplit(response.url).netloc == urlsplit(base).netloc
             payload = response.read()
@@ -53,7 +53,7 @@ def main():
         print("PASS:", filename)
     for path in ("app/", "api/license", "backend/app.py", ".env", "_headers"):
         try:
-            urlopen(urljoin(base, path), timeout=30).close()
+            urlopen(Request(urljoin(base, path), headers={"User-Agent": "GreenPR-Release-Check/1.0"}), timeout=30).close()
         except HTTPError as error:
             assert error.code == 404, (path, error.code)
         else:

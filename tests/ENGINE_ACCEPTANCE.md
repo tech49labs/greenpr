@@ -23,7 +23,7 @@ After the constrained-Python scanner correction, `.release311/Scripts/python.exe
 
 The actual npm minimist advisory flow was repeated through the corrected shared scanner: detected `GHSA-xvch-5gv4-984h` at 1.2.5, updated to 1.2.6, passed behavioral tests and the post-update rescan, preserved the original checkout, and exited 0.
 
-The resolved CLI dependency scan covered **33 package entries with zero reported vulnerabilities**. This is dependency-set evidence, not a final public-checkout self-scan receipt. Resolution used pip dry-run, ignore-installed, and binary-only downloads; every resolved package had to match an exact tracked constraint. Other ecosystem sources keep normal transitive scanning.
+The resolved CLI dependency scan covered **33 package entries with zero reported vulnerabilities**. The separated public checkout also passed GreenPR scan-only and a raw scanner-result assertion: 33 scanned packages, zero vulnerable packages. Resolution used pip dry-run, ignore-installed, and binary-only downloads; every resolved package had to match an exact tracked constraint. Other ecosystem sources keep normal transitive scanning.
 
 ## Remaining acceptance
 
