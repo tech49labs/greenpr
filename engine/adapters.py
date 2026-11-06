@@ -75,6 +75,61 @@ def prepare_baseline(run_directory, ecosystem=None):
     return None
 
 
+def _uv_constraint(manifest, data, package, target):
+    """Pin an already locked registry package without inventing a direct dependency."""
+    from packaging.requirements import Requirement
+    normalize = lambda name: re.sub(r"[-_.]+", "-", name).lower()
+    lockpath = manifest.parent / "uv.lock"
+    tracked(lockpath)
+    locked = [p for p in tomllib.loads(lockpath.read_text()).get("package", [])
+              if normalize(p.get("name", "")) == normalize(package)]
+    if len(locked) != 1 or set(locked[0].get("source", {})) != {"registry"}:
+        raise ValueError("UV constraint requires one existing registry package in uv.lock")
+    uv = data.get("tool", {}).get("uv", {})
+    constraints = uv.get("constraint-dependencies", [])
+    if not isinstance(constraints, list) or any(not isinstance(v, str) for v in constraints):
+        raise ValueError("Unsupported UV constraint array")
+    updated = list(constraints)
+    matches = []
+    for index, value in enumerate(constraints):
+        requirement = Requirement(value)
+        if normalize(requirement.name) == normalize(package):
+            if requirement.marker or requirement.extras or requirement.url:
+                raise ValueError("Conditional UV constraints require manual review")
+            matches.append(index)
+    if len(matches) > 1:
+        raise ValueError("Duplicate UV constraints require manual review")
+    pin = package + "==" + target
+    if matches:
+        updated[matches[0]] = pin
+    else:
+        updated.append(pin)
+    source = manifest.read_text(encoding="utf-8")
+    block = re.search(r"(?ms)^\[tool\.uv\][ \t]*(?:#[^\n]*)?\n(.*?)(?=^\[|\Z)", source)
+    assignment = "constraint-dependencies = " + json.dumps(updated)
+    if block:
+        body = block.group(1)
+        if "constraint-dependencies" in uv:
+            pattern = re.compile(r"(?ms)^[ \t]*constraint-dependencies[ \t]*=[ \t]*\[(.*?)\]")
+            found = list(pattern.finditer(body))
+            if len(found) != 1:
+                raise ValueError("Unsupported UV constraint declaration form")
+            candidate = pattern.sub(lambda _: assignment, body, count=1)
+        else:
+            candidate = assignment + "\n" + body
+        source = source[:block.start(1)] + candidate + source[block.end(1):]
+    elif uv or "uv" in data.get("tool", {}):
+        raise ValueError("Inline UV tables require manual review")
+    else:
+        source += "\n[tool.uv]\n" + assignment + "\n"
+    expected = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    expected.setdefault("tool", {}).setdefault("uv", {})["constraint-dependencies"] = updated
+    if tomllib.loads(source) != expected:
+        raise ValueError("UV constraint edit would change unrelated manifest settings")
+    manifest.write_text(source, encoding="utf-8")
+    return f"uv lock --upgrade-package {package} && uv sync --locked", str(manifest.parent)
+
+
 def update(vuln):
     package, target = vuln["package"], vuln["target_version"]
     validate_arguments(package, target)
@@ -127,6 +182,8 @@ def update(vuln):
         dependencies = data.get("project", {}).get("dependencies", [])
         normalize = lambda value: re.sub(r"[-_.]+", "-", value).lower()
         matches = [dep for dep in dependencies if normalize(re.split(r"[<>=!~\[ ;]", dep, 1)[0]) == normalize(package)]
+        if not matches and (root / "uv.lock").exists():
+            return _uv_constraint(manifest, data, package, target)
         if len(matches) != 1:
             raise ValueError("Python pyproject requires one PEP621 direct dependency; Poetry-specific tables require manual migration")
         from packaging.requirements import Requirement
@@ -233,7 +290,9 @@ def validate_target(vuln):
             raise ValueError("Python pin was not persisted")
         if (root / "uv.lock").exists():
             lock = tomllib.loads((root / "uv.lock").read_text())
-            if not any(item.get("name") == package and item.get("version") == target for item in lock.get("package", [])):
+            normalize = lambda value: re.sub(r"[-_.]+", "-", value).lower()
+            selected = [item for item in lock.get("package", []) if normalize(item.get("name", "")) == normalize(package)]
+            if len(selected) != 1 or selected[0].get("version") != target:
                 raise ValueError("uv lockfile target mismatch")
         if (root / "poetry.lock").exists():
             lock = tomllib.loads((root / "poetry.lock").read_text())

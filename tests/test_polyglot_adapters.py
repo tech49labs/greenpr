@@ -4,6 +4,9 @@ from pathlib import Path
 import tempfile
 import unittest
 from engine.adapters import update
+from engine.adapters import validate_target
+from unittest.mock import patch
+import tomllib
 from engine.runtime import git
 
 
@@ -26,6 +29,49 @@ class AdapterTests(unittest.TestCase):
         self.write("requirements.txt", 'requests[socks]==2.31.0; python_version >= "3.11" # required proxy support\n')
         update({"package": "requests", "target_version": "2.32.4", "ecosystem": "pypi"})
         self.assertEqual(Path("requirements.txt").read_text(), 'requests[socks]==2.32.4; python_version >= "3.11" # required proxy support\n')
+
+    def uv_fixture(self, constraints='["anyio>=4.0"]'):
+        source = '[project]\nname="fixture"\nversion="1.0"\ndependencies=["django-oauth-toolkit[extra]>=3"]\n[dependency-groups]\ntest=["pytest>=8"]\n[tool.uv]\nconstraint-dependencies='+constraints+'\n'
+        self.write('pyproject.toml', source)
+        self.write('uv.lock', 'version=1\n[[package]]\nname="oauthlib"\nversion="4.0.0"\nsource={registry="https://pypi.org/simple"}\n')
+        return source
+
+    def test_uv_transitive_pin_preserves_groups_extras_and_unrelated_floors(self):
+        before = tomllib.loads(self.uv_fixture())
+        command, _ = update({'package':'oauthlib','target_version':'4.0.1','ecosystem':'pypi'})
+        after = tomllib.loads(Path('pyproject.toml').read_text())
+        self.assertEqual(after['project'], before['project'])
+        self.assertEqual(after['dependency-groups'], before['dependency-groups'])
+        self.assertEqual(after['tool']['uv']['constraint-dependencies'], ['anyio>=4.0','oauthlib==4.0.1'])
+        self.assertEqual(command, 'uv lock --upgrade-package oauthlib && uv sync --locked')
+
+    def test_uv_existing_constraint_is_replaced(self):
+        self.uv_fixture('["oauthlib>=4.0.0", "anyio>=4.0"]')
+        update({'package':'oauthlib','target_version':'4.0.1','ecosystem':'pypi'})
+        self.assertEqual(tomllib.loads(Path('pyproject.toml').read_text())['tool']['uv']['constraint-dependencies'], ['oauthlib==4.0.1','anyio>=4.0'])
+
+    def test_uv_unknown_or_conditional_target_refused_before_mutation(self):
+        for package, constraints in [('unknown','[]'), ('oauthlib', '["oauthlib>=4; python_version > \'3.10\'"]'), ('oauthlib','["oauthlib>=4", "oauthlib<5"]')]:
+            with self.subTest(package=package,constraints=constraints):
+                original = self.uv_fixture(constraints)
+                with self.assertRaises(ValueError):
+                    update({'package':package,'target_version':'4.0.1','ecosystem':'pypi'})
+                self.assertEqual(Path('pyproject.toml').read_text(), original)
+
+    def test_uv_requires_exact_installed_and_single_locked_target(self):
+        self.uv_fixture()
+        vuln={'package':'oauthlib','target_version':'4.0.1','ecosystem':'pypi'}
+        with patch('engine.adapters.checked', return_value='4.0.1'):
+            with self.assertRaises(ValueError):
+                validate_target(vuln)
+            path=Path('uv.lock'); path.write_text(path.read_text().replace('4.0.0','4.0.1'))
+            validate_target(vuln)
+            path.write_text(path.read_text()+'\n[[package]]\nname="oauthlib"\nversion="4.0.0"\n')
+            with self.assertRaises(ValueError):
+                validate_target(vuln)
+        with patch('engine.adapters.checked', return_value='4.0.0'):
+            with self.assertRaises(ValueError):
+                validate_target(vuln)
 
     def test_python_preserves_whitespace_before_comment(self):
         self.write("requirements.txt", "requests[socks]==2.31.0 # keep extras\n")

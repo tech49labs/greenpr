@@ -225,7 +225,7 @@ def locate_package_owner(pkg_name: str, repo_root: str = ".") -> Tuple[str, str,
 
     return (repo_root, "(transitive)", False, None, None)
 
-def probe_and_select_verification_gate(repo_root: str = ".", custom_cmd: Optional[str] = None) -> Tuple[Optional[str], float]:
+def probe_and_select_verification_gate(repo_root: str = ".", custom_cmd: Optional[str] = None, timeout: int = 300) -> Tuple[Optional[str], float]:
     """
     Executes a pre-flight sanity check on the pristine repository BEFORE touching any code.
     Probes candidate gates in order of reliability to discard broken or hanging commands.
@@ -282,32 +282,17 @@ def probe_and_select_verification_gate(repo_root: str = ".", custom_cmd: Optiona
         selected.extend(f"npm run {name} --workspaces --if-present" for name in sorted(workspace_scripts))
         candidates = [" && ".join(selected)] if selected else []
     # Every configured gate is mandatory; never weaken on failure.
-    probe_timeout = 300
+    from engine.diagnostics import redact
     for cmd in candidates[:1]:  # Never substitute a weaker gate after a failure.
-        sys.stdout.write(f"  • Probing gate: {cmd}...")
-        sys.stdout.flush()
-        t0 = time.time()
-        try:
-            with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
-                proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True, cwd=repo_root, start_new_session=os.name != "nt")
-                while proc.poll() is None:
-                    time.sleep(0.5)
-                    if time.time() - t0 > probe_timeout:
-                        _kill_process_tree(proc.pid)
-                        sys.stdout.write(f" [TIMEOUT >{probe_timeout}s - rejected]\n")
-                        break
-                else:
-                    dur = time.time() - t0
-                    if proc.returncode == 0:
-                        sys.stdout.write(f" [PASSED in {dur:.1f}s]\n")
-                        print(f"[GreenPR Baseline] Verified passing gate: '{cmd}' (exit 0 in {dur:.1f}s)\n")
-                        return cmd, dur
-                    else:
-                        sys.stdout.write(f" [FAILED exit {proc.returncode} in {dur:.1f}s - rejected]\n")
-        except Exception as e:
-            sys.stdout.write(f" [ERROR: {e}]\n")
-
+        started = time.monotonic()
+        result = _run_with_heartbeat(cmd, "Baseline verification", cwd=repo_root,
+                                     timeout=timeout, phase="baseline")
+        duration = time.monotonic() - started
+        if result.returncode == 0:
+            print(f"[GreenPR Baseline] Verified passing gate: '{redact(cmd)}' (exit 0 in {duration:.1f}s)\n")
+            return cmd, duration
     return None, 0.0
+
 
 def resolve_subproject_test_cmd(working_dir: str, custom_test_cmd: Optional[str] = None) -> str:
     """Intelligently detects or applies the verification command for a subproject directory."""
@@ -680,44 +665,55 @@ def _attempt_file_patch(filepath: str, error_trace: str, vuln: Dict, plan: Migra
 
     return False
 
-def _run_with_heartbeat(cmd: str, label: str, cwd: Optional[str] = None, timeout: int = 180) -> subprocess.CompletedProcess:
-    """
-    Executes a verification command with temporary file I/O to prevent 64KB OS pipe buffer deadlocks,
-    paired with live heartbeat ticks and tree-wide process termination on timeout.
-    """
-    t0 = time.time()
-    sys.stdout.write(f"        • {label} [0s]...")
+def _run_with_heartbeat(cmd: str, label: str, cwd: Optional[str] = None, timeout: int = 180,
+                        phase: Optional[str] = None) -> subprocess.CompletedProcess:
+    """Execute a full gate and retain safe evidence, including timeout output."""
+    from engine.diagnostics import record_command, redact
+    started = time.monotonic()
+    phase = phase or ("bootstrap" if "baseline dependenc" in label.lower() else
+                      "install" if "install" in label.lower() else "final")
+    safe_label = redact(label)
+    sys.stdout.write(f"        • {safe_label} [0s]...")
     sys.stdout.flush()
-
     try:
         with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
-            proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True, cwd=cwd, start_new_session=os.name != "nt")
+            proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True,
+                                    cwd=cwd, start_new_session=os.name != "nt")
+            timed_out = False
             while proc.poll() is None:
-                time.sleep(0.5)
-                elapsed = int(time.time() - t0)
-                if elapsed >= timeout:
+                if time.monotonic() - started >= timeout:
+                    timed_out = True
                     _kill_process_tree(proc.pid)
                     proc.wait(timeout=10)
-                    sys.stdout.write(f"\r        • {label} [TIMEOUT after {timeout}s]\n")
-                    sys.stdout.flush()
-                    return subprocess.CompletedProcess(args=cmd, returncode=124, stdout=b"", stderr=b"Verification gate timed out.")
-                sys.stdout.write(f"\r        • {label} [{elapsed}s elapsed]...")
+                    break
+                time.sleep(0.5)
+                sys.stdout.write(f"\r        • {safe_label} [{int(time.monotonic() - started)}s elapsed]...")
                 sys.stdout.flush()
-
-            dur = time.time() - t0
             out_f.seek(0)
             err_f.seek(0)
-            stdout = out_f.read()
-            stderr = err_f.read()
+            stdout, stderr = out_f.read(), err_f.read()
+            raw = (subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+                   if timed_out else subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr))
+            evidence = record_command(cmd, raw, phase=phase, duration_seconds=time.monotonic() - started)
+            code = 124 if timed_out else proc.returncode
+    except Exception as exc:
+        evidence = record_command(cmd, exc, phase=phase, duration_seconds=time.monotonic() - started)
+        code = 1
+    status = "passed" if code == 0 else f"failed: {evidence['classification']}"
+    print(f"\r        • {safe_label} [{status} in {evidence['elapsed_seconds']:.1f}s]")
+    if code != 0:
+        print(f"          {evidence['summary']}")
+        if evidence.get("log_path"):
+            print(f"          Diagnostic log: {evidence['log_path']}")
+        else:
+            # Standalone callers have no active receipt directory.
+            preview = (evidence['stderr'] or evidence['stdout']).strip().splitlines()[-8:]
+            for line in preview:
+                print(f"          {line[:300]}")
+    return subprocess.CompletedProcess(args=redact(cmd), returncode=code,
+                                       stdout=evidence['stdout'].encode('utf-8'),
+                                       stderr=evidence['stderr'].encode('utf-8'))
 
-            if proc.returncode == 0:
-                sys.stdout.write(f"\r        • {label} [passed in {dur:.1f}s]      \n")
-            else:
-                sys.stdout.write(f"\r        • {label} [failed in {dur:.1f}s]      \n")
-            sys.stdout.flush()
-            return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
-    except Exception as e:
-        return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b"", stderr=str(e).encode('utf-8'))
 
 def resolve_package_bump_command(vuln: Dict, profile: Dict) -> Tuple[str, str]:
     from engine.npm import update
@@ -752,7 +748,7 @@ def verify_updated_target(vuln: Dict) -> bool:
         return False
 
 
-def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified_gate: str, baseline_dur: float = 30.0, verbose: bool = False) -> bool:
+def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified_gate: str, baseline_dur: float = 30.0, verbose: bool = False, verification_timeout: Optional[int] = None) -> bool:
     """Apply one update and require the selected verification command to pass."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
@@ -774,7 +770,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified
         return False
 
     # Dynamic verification timeout based on baseline duration
-    gate_timeout = max(90, int(baseline_dur * 2.5))
+    gate_timeout = verification_timeout if verification_timeout is not None else max(90, int(baseline_dur * 2.5))
 
     # Step A: Verified gate check with live heartbeat ticker
     initial_test = _run_with_heartbeat(verified_gate, f"Verification: {verified_gate}", timeout=gate_timeout)
@@ -870,8 +866,9 @@ def _render_summary_table(results: List[Dict], total_elapsed: float, skip_pr: bo
     print(f"  Mode: {mode_str}")
     print("-" * 64 + "\n")
 
-def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) -> bool:
+def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False, skip_hosted_ci: bool = False) -> bool:
     """Publish only after every Git operation succeeds; never force push."""
+    from engine.diagnostics import redact, record_command
     if skip_pr:
         return True
     pkg, target = vuln["package"], vuln["target_version"]
@@ -879,20 +876,41 @@ def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) 
     body = (f"GreenPR updated `{pkg}` to `{target}`.\n\n"
             f"Verification command: `{vuln.get('verified_gate', 'unknown')}`\n"
             "Result: exit 0. This covers only the configured command; review the diff before merging.\n")
+    body = redact(body)
+    if skip_hosted_ci:
+        body += "\nA [skip ci] marker requests skipping hosted push/pull_request workflows; all configured verification gates above ran locally. Required GitHub checks may remain pending and merge protections remain in effect. This does not bypass required checks or merge the PR.\n"
+    title = redact(f"fix(deps): update {pkg} to {target}")
+    def publish(command):
+        started = time.monotonic()
+        try:
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            evidence = record_command(command, exc, phase="publish", duration_seconds=time.monotonic() - started)
+            vuln["publication_error"] = evidence['stderr'] or evidence['summary']
+            raise
+        record_command(command, result, phase="publish", duration_seconds=time.monotonic() - started)
+        return result
     try:
-        subprocess.run(["git", "switch", "-c", branch], check=True)
-        subprocess.run(["git", "add", "--update"], check=True)
-        subprocess.run(["git", "commit", "-m", f"fix(deps): update {pkg} to {target}"], check=True)
-        subprocess.run(["git", "push", "-u", "origin", branch], check=True)
+        publish(["git", "switch", "-c", branch])
+        vuln["branch"] = branch
+        publish(["git", "add", "--update"])
+        publish(["git", "commit", "-m", title + (" [skip ci]" if skip_hosted_ci else "")])
+        publish(["git", "push", "-u", "origin", branch])
         with tempfile.TemporaryDirectory(prefix="greenpr-pr-") as tmp:
             body_path = os.path.join(tmp, "body.md")
             with open(body_path, "w", encoding="utf-8") as f:
                 f.write(body)
-            subprocess.run(["gh", "pr", "create", "--title", f"fix(deps): update {pkg} to {target}",
-                            "--body-file", body_path], check=True)
+            created = publish(["gh", "pr", "create", "--head", branch, "--title", title,
+                               "--body-file", body_path])
+            url = redact(created.stdout).strip()
+            if not re.fullmatch(r"https://[^\s/]+/[^\s/]+/[^\s/]+/pull/[0-9]+", url):
+                vuln["publication_error"] = "GitHub CLI returned no verifiable pull request URL; inspect the remote before retrying."
+                print(f"[ERROR] {vuln['publication_error']}")
+                return False
+            vuln["pull_request_url"] = url
         return True
     except (subprocess.CalledProcessError, OSError) as exc:
-        print(f"[ERROR] PR delivery failed; local changes preserved: {exc}")
+        print(f"[ERROR] PR delivery failed; local changes preserved: {redact(str(exc))}")
         return False
 
 
@@ -900,20 +918,24 @@ def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) 
 # Main Orchestrator Execution
 # ==============================================================================
 
-def _run_current_checkout():
+def _run_current_checkout(config=None):
     parser = argparse.ArgumentParser(description="GreenPR: dependency updates checked against your verification command")
     parser.add_argument("--test-cmd", action="append", default=None, help="Required verification command; repeat to require multiple commands")
     parser.add_argument("--project", default=".", help="Project directory relative to the repository root")
+    parser.add_argument("--doctor", action="store_true", help="Check configured test prerequisites without modifying the repository")
     parser.add_argument("--package", type=str, default=None, help="Target specific package (skips full scan)")
     parser.add_argument("--target-version", type=str, default=None, help="Target version for specific package")
     parser.add_argument("--limit", type=int, default=1, help="One package per run; repeat after reviewing the result")
     parser.add_argument("--skip-pr", action="store_true", help="Retain a separate review worktree with patch and result receipt without publishing a PR")
+    parser.add_argument("--skip-hosted-ci", action="store_true", help="Add [skip ci] to the published commit after all local gates pass; required GitHub checks remain pending")
     parser.add_argument("--dry-run", "--scan-only", dest="dry_run", action="store_true", help="Scan and display discovered vulnerabilities without modifying files")
     parser.add_argument("--enable-model-repair", action="store_true", help="Allow source and error traces to be sent to a configured model provider")
     parser.add_argument("--commercial", action="store_true", help="Verify a paid license for this GitHub origin before execution")
     parser.add_argument("--verbose", action="store_true", help="Display full verbose package manager output")
     parser.add_argument("--ecosystem", type=str, default=None, choices=["npm", "pypi", "go", "crates.io", "maven", "nuget", "all"], help="Filter by ecosystem (npm, pypi, go, crates.io, all)")
     args = parser.parse_args()
+    if config:
+        args.test_cmd = list(config.gates) + (args.test_cmd or [])
     os.environ["GREENPR_ENABLE_MODEL_REPAIR"] = "1" if args.enable_model_repair else "0"
 
     if bool(args.package) != bool(args.target_version):
@@ -955,7 +977,7 @@ def _run_current_checkout():
     print(f"Active Profile: {profile_label}")
 
     # Step 0: Autonomous Baseline Sanity Gate Check (Mandatory Pre-flight)
-    verified_gate, baseline_dur = ("", 0.0) if args.dry_run else probe_and_select_verification_gate(".", custom_cmd=" && ".join(args.test_cmd) if args.test_cmd else None)
+    verified_gate, baseline_dur = ("", 0.0) if args.dry_run else probe_and_select_verification_gate(".", custom_cmd=" && ".join(args.test_cmd) if args.test_cmd else None, timeout=config.timeout_seconds if config else 300)
     if not verified_gate and not args.dry_run:
         print("\n[ERROR] GreenPR: Cannot proceed. No passing verification gates found on clean repository.")
         print("The selected verification command must pass before updates begin.")
@@ -1033,12 +1055,12 @@ def _run_current_checkout():
 
         pkg_start = time.time()
         plan = extract_migration_plan(pkg, cur, tgt, vuln.get("summary", ""))
-        success = execute_remediation(primary_profile, vuln, plan, verified_gate, baseline_dur=baseline_dur, verbose=args.verbose)
+        success = execute_remediation(primary_profile, vuln, plan, verified_gate, baseline_dur=baseline_dur, verbose=args.verbose, verification_timeout=config.timeout_seconds if config else None)
         pkg_dur = time.time() - pkg_start
 
         if success:
             vuln["verified_gate"] = verified_gate
-            if not create_pull_request(vuln, plan, skip_pr=args.skip_pr):
+            if not create_pull_request(vuln, plan, skip_pr=args.skip_pr, skip_hosted_ci=args.skip_hosted_ci):
                 sys.exit(1)
             print(f"        ✔ Configured verification passed ({pkg_dur:.1f}s)\n")
             results.append({
@@ -1049,6 +1071,8 @@ def _run_current_checkout():
                 "status": "SUCCESS",
                 "verified_owners": vuln.get("verified_owners", []),
                 "post_update_scan": vuln.get("post_update_scan"),
+                "pull_request_url": vuln.get("pull_request_url"),
+                "branch": vuln.get("branch"),
                 "duration": pkg_dur
             })
         else:
@@ -1066,18 +1090,39 @@ def _run_current_checkout():
     _render_summary_table(results, total_time, args.skip_pr)
     if any(r["status"] != "SUCCESS" for r in results):
         sys.exit(1)
-    return {"updates": results, "verification_command": verified_gate, "baseline_seconds": baseline_dur}
+    from engine.diagnostics import redact
+    return {"updates": results, "verification_command": redact(verified_gate), "baseline_seconds": baseline_dur}
 
 def main():
     from engine.runtime import isolated_checkout
+    from engine.onboarding import load_config, doctor, run_setup, run_cleanup
+    from engine.diagnostics import redact
     from pathlib import Path
     if any(flag in sys.argv[1:] for flag in ("--help", "-h")):
         return _run_current_checkout()
     selection = argparse.ArgumentParser(add_help=False)
-    selection.add_argument("--project", default=".")
+    selection.add_argument("--project", default=None)
     selection.add_argument("--ecosystem", default=None)
     selected, _ = selection.parse_known_args()
     original = Path.cwd().resolve()
+    try:
+        config = load_config(original)
+        if config and selected.project is not None and selected.project != config.project:
+            raise ValueError("--project conflicts with .greenpr.toml; use the configured project")
+        selected.project = selected.project or (config.project if config else ".")
+        if "--doctor" in sys.argv[1:]:
+            if not config:
+                print("[ERROR] Add a reviewed .greenpr.toml with the project and required gates first.")
+                raise SystemExit(2)
+            findings = doctor(config, original)
+            for finding in findings:
+                print(f"[{finding.code}] {finding.message}")
+            if not findings:
+                print("Configured prerequisites are available. Baseline tests still must pass before remediation.")
+            raise SystemExit(1 if findings else 0)
+    except (ValueError, OSError) as exc:
+        print(f"[ERROR] {redact(str(exc))}", file=sys.stderr)
+        raise SystemExit(2) from exc
     project = (original / selected.project).resolve()
     if not project.is_relative_to(original) or not project.is_dir():
         print("[ERROR] Project must stay inside the repository", file=sys.stderr)
@@ -1099,21 +1144,51 @@ def main():
     try:
         with isolated_checkout() as receipt:
             from engine.adapters import prepare_baseline
+            from dataclasses import replace
+            candidate_config = load_config(receipt["worktree"])
+            comparable = replace(candidate_config, source_root=original) if candidate_config else None
+            if comparable != config:
+                raise RuntimeError("Onboarding config differs from the committed candidate; commit the reviewed config before running")
+            if candidate_config:
+                import hashlib
+                committed_config_bytes = (Path(receipt["worktree"]) / ".greenpr.toml").read_bytes()
+                if committed_config_bytes != (original / ".greenpr.toml").read_bytes():
+                    raise RuntimeError("Onboarding config changed during candidate creation")
+                receipt["config_sha256"] = hashlib.sha256(committed_config_bytes).hexdigest()
             project = (Path.cwd() / selected.project).resolve()
             if not project.is_relative_to(Path.cwd().resolve()) or not project.is_dir():
                 raise RuntimeError("Project must stay inside the repository")
             os.chdir(project)
-            command = prepare_baseline(Path(receipt["worktree"]).parent, selected.ecosystem)
-            if command:
-                install = _run_with_heartbeat(command, "Install baseline dependencies", timeout=300)
-                if install.returncode:
-                    raise RuntimeError("Baseline dependency install failed")
-            result = _run_current_checkout()
-            if isinstance(result, dict):
-                receipt.update(result)
-            return result
+            os.environ["GREENPR_RUN_ID"] = receipt["run_id"]
+            if config:
+                os.environ.update(config.environment)
+            try:
+                command = prepare_baseline(Path(receipt["worktree"]).parent, selected.ecosystem)
+                if command:
+                    install = _run_with_heartbeat(command, "Install baseline dependencies", timeout=config.timeout_seconds if config else 300)
+                    if install.returncode:
+                        raise RuntimeError("Baseline dependency install failed; inspect the retained diagnostic log")
+                if config:
+                    run_setup(config, receipt["worktree"], _run_with_heartbeat)
+                    findings = doctor(config, receipt["worktree"])
+                    if findings:
+                        raise RuntimeError("; ".join(f.message for f in findings))
+                result = _run_current_checkout(config)
+                if isinstance(result, dict):
+                    receipt.update(result)
+                return result
+            finally:
+                if config:
+                    cleanup_findings = run_cleanup(config, receipt["worktree"], _run_with_heartbeat)
+                    receipt["cleanup_findings"] = [f.message for f in cleanup_findings]
+                    for finding in cleanup_findings:
+                        print(f"[cleanup] {finding.message}")
+                    active_error = sys.exc_info()[1]
+                    if cleanup_findings and (active_error is None or
+                            isinstance(active_error, SystemExit) and active_error.code in (None, 0)):
+                        raise RuntimeError("Configured cleanup failed; inspect retained diagnostics")
     except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as exc:
-        print(f"[ERROR] {exc}", file=sys.stderr)
+        print(f"[ERROR] {redact(str(exc))}", file=sys.stderr)
         raise SystemExit(2) from exc
     finally:
         os.environ.clear()
