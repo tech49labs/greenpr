@@ -1,0 +1,37 @@
+name: GreenPR Team license request
+description: Request manual onboarding for GreenPR Team at US$49 per repository/month.
+title: "GreenPR Team license request"
+assignees:
+  - Mbuso-Harvey
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **GreenPR Team — US$49 per repository/month.**
+
+        This is a public request inbox. A GitHub account is required to submit a request. GreenPR will follow up in this issue to arrange the next steps. Licensing and payment are arranged manually; submitting this request does not charge you or activate a subscription.
+
+        Do not include email addresses, private organization or repository names, source code, credentials, card details, or other sensitive information. Share only a repository count and an optional general use case.
+  - type: input
+    id: repository-count
+    attributes:
+      label: Number of repositories
+      description: Enter a count only. Do not include repository names or links.
+      placeholder: "1"
+    validations:
+      required: true
+  - type: textarea
+    id: general-use-case
+    attributes:
+      label: General use case (optional)
+      description: Briefly describe what you need without identifying private projects or people.
+      placeholder: Dependency updates for a small development team.
+    validations:
+      required: false
+  - type: checkboxes
+    id: public-request-acknowledgment
+    attributes:
+      label: Public request acknowledgment
+      options:
+        - label: I understand this issue is public, have included no sensitive information, and understand that this request does not charge me or activate a subscription.
+          required: true

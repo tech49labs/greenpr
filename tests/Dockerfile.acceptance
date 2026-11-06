@@ -1,0 +1,33 @@
+FROM golang:1.25-bookworm AS go
+FROM rust:1.90-bookworm AS rust
+FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS dotnet
+FROM gradle:9.2.1-jdk17 AS gradle
+FROM maven:3.9.11-eclipse-temurin-17 AS maven
+FROM python:3.14-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl ca-certificates build-essential libicu72 libssl3 zlib1g nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=go /usr/local/go /usr/local/go
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+COPY --from=dotnet /usr/share/dotnet /usr/share/dotnet
+COPY --from=gradle /opt/gradle /opt/gradle
+COPY --from=maven /usr/share/maven /usr/share/maven
+COPY --from=maven /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk \
+    CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    DOTNET_ROOT=/usr/share/dotnet \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    PATH=/usr/local/go/bin:/usr/local/cargo/bin:/usr/share/dotnet:/opt/gradle/bin:/usr/share/maven/bin:/opt/java/openjdk/bin:$PATH
+RUN curl --fail --location --silent --show-error \
+    https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64 \
+    -o /usr/local/bin/osv-scanner \
+    && echo '160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b  /usr/local/bin/osv-scanner' | sha256sum -c - \
+    && chmod +x /usr/local/bin/osv-scanner
+COPY requirements.txt requirements.lock.txt /tmp/
+RUN python -m pip install --no-cache-dir -r /tmp/requirements.txt
+WORKDIR /workspace
+CMD ["python", "-m", "unittest", "discover", "-s", "tests", "-v"]

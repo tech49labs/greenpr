@@ -1,0 +1,13 @@
+.git
+.cosmos
+.venv
+.release-deps
+backend/.deps
+**/__pycache__
+**/node_modules
+.env
+.env.*
+*.pem
+!engine/license_public_key.pem
+cosmos.environment.json
+.release311/

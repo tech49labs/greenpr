@@ -1,0 +1,50 @@
+{
+  "brand": "GreenPR",
+  "currency": "usd",
+  "interval": "month",
+  "status": "manual_github_requests_reference_only",
+  "checkout": "github_request_then_manual_invoice_and_license",
+  "stripe_resources_created": false,
+  "products": [
+    {
+      "id": "greenpr_team",
+      "name": "GreenPR Team",
+      "description": "GreenPR commercial software license for one private repository. Run dependency updates on your own infrastructure.",
+      "statement_descriptor": "GREENPR",
+      "unit_label": "repository",
+      "default_price_data": {
+        "currency": "usd",
+        "unit_amount": 4900,
+        "recurring": {
+          "interval": "month"
+        }
+      },
+      "metadata": {
+        "project": "greenpr",
+        "plan": "team"
+      },
+      "request_url": "https://github.com/tech49labs/greenpr/issues/new?template=team-license.yml"
+    },
+    {
+      "id": "greenpr_enterprise",
+      "name": "GreenPR Enterprise",
+      "description": "GreenPR organization-wide commercial software license for private repositories. Run dependency updates on your own infrastructure.",
+      "statement_descriptor": "GREENPR",
+      "unit_label": "organization",
+      "default_price_data": {
+        "currency": "usd",
+        "unit_amount": 89900,
+        "recurring": {
+          "interval": "month"
+        }
+      },
+      "metadata": {
+        "project": "greenpr",
+        "plan": "enterprise"
+      },
+      "request_url": "https://github.com/tech49labs/greenpr/issues/new?template=enterprise-license.yml"
+    }
+  ],
+  "request_url": "https://github.com/tech49labs/greenpr/issues/new/choose",
+  "request_assignee": "Mbuso-Harvey"
+}

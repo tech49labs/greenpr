@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GreenPR: Autonomous Zero-Hallucination Dependency Remediation Engine.
+GreenPR: Dependency updates checked against your verification command.
 Proprietary software by tech49labs. All rights reserved.
 """
 
@@ -23,23 +23,6 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-
-# On Windows, sync credentials from User Registry so existing sessions inherit active keys
-if sys.platform == "win32":
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as reg_key:
-            for env_var in ["GEMINI_API_KEY", "GREENPR_API_KEY", "ANTHROPIC_API_KEY"]:
-                try:
-                    reg_val, _ = winreg.QueryValueEx(reg_key, env_var)
-                    cur = os.environ.get(env_var, "")
-                    if not cur or cur.startswith("ya29."):
-                        os.environ[env_var] = reg_val
-                except FileNotFoundError:
-                    pass
-    except Exception:
-        pass
-
 
 # ==============================================================================
 # 1. GreenPR Semantic Protocol Schema
@@ -102,7 +85,7 @@ LANGUAGE_PROFILES = {
         ),
         "lint_cmd": "ruff check . --fix" if shutil.which("ruff") else None,
         "compile_cmd": "mypy ." if shutil.which("mypy") else None,
-        "default_test": "pytest",
+        "default_test": "python -m pytest",
     },
     "go": {
         "name": "Go",
@@ -125,7 +108,7 @@ LANGUAGE_PROFILES = {
     "java": {
         "name": "Java (Maven / Gradle)",
         "ecosystems": ["maven"],
-        "detect": lambda p: os.path.exists(os.path.join(p, "pom.xml")) or os.path.exists(os.path.join(p, "build.gradle")),
+        "detect": lambda p: os.path.exists(os.path.join(p, "pom.xml")) or os.path.exists(os.path.join(p, "build.gradle")) or os.path.exists(os.path.join(p, "build.gradle.kts")),
         "bump_cmd": lambda pkg, ver, p=".": (
             f"mvn versions:use-dep-version -Dincludes={pkg} -DdepVersion={ver}" if os.path.exists(os.path.join(p, "pom.xml"))
             else "./gradlew dependencyUpdates"
@@ -149,7 +132,10 @@ def get_profile_for_dir(dir_path: str = ".") -> Optional[Dict]:
     """Resolves language profile for a specific directory."""
     for key, profile in LANGUAGE_PROFILES.items():
         if profile["detect"](dir_path):
-            return profile
+            selected = dict(profile)
+            if key == "java":
+                selected["default_test"] = "mvn -B -ntp test" if os.path.exists(os.path.join(dir_path, "pom.xml")) else "gradlew.bat test --no-daemon" if os.name == "nt" and os.path.exists(os.path.join(dir_path, "gradlew.bat")) else "./gradlew test --no-daemon" if os.path.exists(os.path.join(dir_path, "gradlew")) else "gradle test --no-daemon"
+            return selected
     return None
 
 def discover_repository_profiles(root_dir: str = ".") -> List[Dict]:
@@ -221,10 +207,13 @@ def locate_package_owner(pkg_name: str, repo_root: str = ".") -> Tuple[str, str,
                 deps = data.get('dependencies', {})
                 dev_deps = data.get('devDependencies', {})
                 peer_deps = data.get('peerDependencies', {})
+                optional_deps = data.get('optionalDependencies', {})
                 if pkg_name in deps:
                     found.append((root, name, True, 'dependencies', deps[pkg_name]))
                 elif pkg_name in dev_deps:
                     found.append((root, name, True, 'devDependencies', dev_deps[pkg_name]))
+                elif pkg_name in optional_deps:
+                    found.append((root, name, True, 'optionalDependencies', optional_deps[pkg_name]))
                 elif pkg_name in peer_deps:
                     found.append((root, name, True, 'peerDependencies', peer_deps[pkg_name]))
             except Exception:
@@ -275,15 +264,32 @@ def probe_and_select_verification_gate(repo_root: str = ".", custom_cmd: Optiona
     if prof and prof.get("default_test") and prof["default_test"] not in candidates:
         candidates.append(prof["default_test"])
 
-    # Probe each candidate using tempfiles to avoid OS pipe deadlock
-    probe_timeout = 60
-    for cmd in candidates:
+    if custom_cmd:
+        candidates = [custom_cmd]
+    elif os.path.exists(pj_path):
+        from engine.npm import manifests
+        selected = []
+        workspace_scripts = set()
+        for path, manifest in manifests():
+            available = [name for name in ("test", "test:unit", "test:ci", "typecheck", "build") if name in manifest.get("scripts", {})]
+            if not available:
+                print(f"[ERROR] No verification scripts configured for {path}")
+                return None, 0.0
+            if path.parent == __import__("pathlib").Path(repo_root).resolve():
+                selected.extend(f"npm run {name}" for name in available)
+            else:
+                workspace_scripts.update(available)
+        selected.extend(f"npm run {name} --workspaces --if-present" for name in sorted(workspace_scripts))
+        candidates = [" && ".join(selected)] if selected else []
+    # Every configured gate is mandatory; never weaken on failure.
+    probe_timeout = 300
+    for cmd in candidates[:1]:  # Never substitute a weaker gate after a failure.
         sys.stdout.write(f"  • Probing gate: {cmd}...")
         sys.stdout.flush()
         t0 = time.time()
         try:
             with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
-                proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True, cwd=repo_root)
+                proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True, cwd=repo_root, start_new_session=os.name != "nt")
                 while proc.poll() is None:
                     time.sleep(0.5)
                     if time.time() - t0 > probe_timeout:
@@ -338,7 +344,9 @@ def resolve_subproject_test_cmd(working_dir: str, custom_test_cmd: Optional[str]
 
 def resolve_engine_tiers() -> Dict[str, Optional[str]]:
     """Resolves primary and secondary model routing based on available environment credentials."""
-    raw_key = os.environ.get("GREENPR_API_KEY") or os.environ.get("API_KEY")
+    if os.environ.get("GREENPR_ENABLE_MODEL_REPAIR") != "1":
+        return {"tier1": None, "tier2": None, "provider": "disabled"}
+    raw_key = os.environ.get("GREENPR_API_KEY")
     explicit_model = os.environ.get("GREENPR_MODEL") or os.environ.get("MODEL")
 
     if raw_key:
@@ -371,76 +379,70 @@ def resolve_engine_tiers() -> Dict[str, Optional[str]]:
 # ==============================================================================
 
 def select_target_version(pkg_name: str, current_ver: Optional[str], vulnerabilities: List[Dict]) -> Optional[str]:
-    """Finds the optimal, non-breaking fixed version that satisfies security advisories."""
-    all_fixes = []
-    for vuln in vulnerabilities:
-        for aff in vuln.get("affected", []):
-            aff_pkg = aff.get("package", {}).get("name")
-            if aff_pkg and aff_pkg != pkg_name:
-                continue
-            for r in aff.get("ranges", []):
-                for ev in r.get("events", []):
-                    if "fixed" in ev and ev["fixed"]:
-                        all_fixes.append(ev["fixed"])
-
-    all_fixes = list(dict.fromkeys(all_fixes))
-    if not all_fixes:
-        return None
-
-    if not current_ver or current_ver in ("current", ""):
-        try:
-            return str(max(all_fixes, key=parse_ver))
-        except Exception:
-            return all_fixes[0]
-
-    cur_parsed = parse_ver(current_ver)
-    
-    # Filter candidate fixes >= current_ver
-    gte_fixes = []
-    for f in all_fixes:
-        try:
-            if parse_ver(f) >= cur_parsed:
-                gte_fixes.append(f)
-        except Exception:
-            pass
-
-    if not gte_fixes:
-        # All available fixes are strictly older than current version. Prevent invalid downgrades.
-        return None
-
-    # Separate stable releases from pre-releases
-    def is_prerelease(v):
-        try:
-            p = parse_ver(v)
-            return getattr(p, "is_prerelease", False)
-        except Exception:
-            return False
-
-    stable_gte = [f for f in gte_fixes if not is_prerelease(f)]
-    pool = stable_gte if stable_gte else gte_fixes
-
+    """Choose a stable newer fix outside every reported affected range; reject unknown ranges."""
     try:
-        return str(min(pool, key=parse_ver))
-    except Exception:
-        return pool[0]
+        current = version.Version(re.sub(r"^[v=^~>< ]+", "", current_ver or ""))
+        ranges = []
+        fixes = set()
+        listed_versions = set()
+        for advisory in vulnerabilities:
+            matching = [item for item in advisory.get("affected", []) if item.get("package", {}).get("name") == pkg_name]
+            if not matching:
+                return None
+            for affected in matching:
+                listed_versions.update(affected.get("versions", []))
+                if not affected.get("ranges"):
+                    return None
+                for affected_range in affected["ranges"]:
+                    if affected_range.get("type") not in ("SEMVER", "ECOSYSTEM"):
+                        return None
+                    lower = None
+                    for event in affected_range.get("events", []):
+                        if "introduced" in event:
+                            if lower is not None:
+                                return None
+                            lower = version.Version(event["introduced"])
+                        elif "fixed" in event:
+                            if lower is None:
+                                return None
+                            upper = version.Version(event["fixed"])
+                            ranges.append((lower, upper, False))
+                            fixes.add(event["fixed"])
+                            lower = None
+                        elif "last_affected" in event:
+                            if lower is None:
+                                return None
+                            ranges.append((lower, version.Version(event["last_affected"]), True))
+                            lower = None
+                        else:
+                            return None
+                    if lower is not None:
+                        ranges.append((lower, None, False))
+        for fix in sorted(fixes, key=version.Version):
+            candidate = version.Version(fix)
+            if candidate <= current or candidate.is_prerelease or candidate.is_devrelease or fix in listed_versions:
+                continue
+            if not any(candidate >= low and (high is None or candidate < high or (inclusive and candidate == high))
+                       for low, high, inclusive in ranges):
+                return fix
+    except (version.InvalidVersion, TypeError, KeyError):
+        return None
+    return None
+
 
 def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> List[Dict]:
     """Scans project dependency graph for identified security issues with strict monorepo ecosystem binding."""
     print("[GreenPR Radar] Scanning dependency graph for security vulnerabilities...")
-    cmd = "osv-scanner --format=json -r ."
-    
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=False, shell=True)
-        raw_output = proc.stdout.decode('utf-8', errors='replace').strip()
-        if not raw_output:
-            return []
-        
-        data = json.loads(raw_output)
+        from engine.scanner import scan_source
+        data = scan_source()
         vulnerabilities = []
 
         for result in data.get("results", []):
             source_info = result.get("source", {})
             source_path = source_info.get("path", "").replace("\\", "/")
+            if os.path.isabs(source_path):
+                source_path = os.path.relpath(source_path, ".").replace("\\", "/")
             working_dir = os.path.dirname(source_path) if source_path else "."
             if not working_dir:
                 working_dir = "."
@@ -470,7 +472,10 @@ def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> Li
                 primary_vuln = vuln_list[0] if vuln_list else {}
                 vuln_id = primary_vuln.get("id", "SECURITY")
 
-                owner_dir, subproj, is_direct, dep_type, decl_ver = locate_package_owner(pkg_name, ".")
+                if ecosystem.lower() == "npm":
+                    owner_dir, subproj, is_direct, dep_type, decl_ver = locate_package_owner(pkg_name, ".")
+                else:
+                    owner_dir, subproj, is_direct, dep_type, decl_ver = working_dir, working_dir, True, None, current_ver
 
                 vulnerabilities.append({
                     "package": pkg_name,
@@ -487,8 +492,8 @@ def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> Li
                 })
 
         return vulnerabilities
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError(f"Vulnerability scan incomplete: {exc}") from exc
 
 
 # ==============================================================================
@@ -497,6 +502,8 @@ def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> Li
 
 def extract_migration_plan(package_name: str, current_ver: str, target_ver: str, changelog_text: str) -> MigrationPlan:
     """Analyzes version upgrade requirements into structured transformation schema."""
+    if os.environ.get("GREENPR_ENABLE_MODEL_REPAIR") != "1":
+        return MigrationPlan(package_name=package_name, target_version=target_ver, general_summary="Dependency update; model repair disabled.")
     prompt = (
         f"Analyze the following upgrade information for {package_name} from {current_ver} to {target_ver}. "
         f"Extract all breaking API changes into the schema. If no breaking changes exist, leave breaking_changes empty.\n\n"
@@ -544,7 +551,7 @@ def extract_migration_plan(package_name: str, current_ver: str, target_ver: str,
 
 
 # ==============================================================================
-# 6. GreenPR Autonomous Code Repair Engine (Zero Third-Party Leaks)
+# 6. GreenPR Optional Model-Assisted Source Repair
 # ==============================================================================
 
 def _strip_markdown(code_text: str) -> str:
@@ -580,7 +587,7 @@ def _call_native_llm(prompt: str, model_name: str, provider: str) -> Optional[st
             resp = client.chat.completions.create(
                 model=clean_model,
                 messages=[
-                    {"role": "system", "content": "You are the GreenPR Autonomous Remediation Engine by tech49labs."},
+                    {"role": "system", "content": "You are the GreenPR dependency remediation engine."},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -604,35 +611,34 @@ def _call_native_llm(prompt: str, model_name: str, provider: str) -> Optional[st
 
     return None
 
-def _extract_failing_files(error_output: str) -> List[str]:
-    """Identifies broken source files directly from compiler and test error traces."""
-    candidates = []
-    pattern = r'([a-zA-Z0-9_\-\./\\]+\.(?:ts|tsx|js|jsx|py|go|rs|java|cs|json|toml|yaml|yml))'
-    matches = re.findall(pattern, error_output)
-    
-    for m in matches:
-        clean = m.split(':')[0].strip().replace('\\', '/')
-        if clean.startswith('./'):
-            clean = clean[2:]
-        if os.path.isfile(clean):
-            if not any(skip in clean for skip in ['node_modules', '.git', '.venv', 'venv', '__pycache__', 'dist', 'build', '.lock']):
-                if clean not in candidates:
-                    candidates.append(clean)
-
+def safe_repair_path(filepath: str) -> bool:
+    from pathlib import Path
+    root = Path.cwd().resolve()
+    path = Path(filepath)
     try:
-        git_proc = subprocess.run("git diff --name-only", capture_output=True, text=True, shell=True)
-        for gf in git_proc.stdout.splitlines():
-            gf = gf.strip().replace('\\', '/')
-            if gf and os.path.isfile(gf) and gf not in candidates:
-                if not any(skip in gf for skip in ['bun.lock', 'pnpm-lock.yaml', 'package-lock.json', 'yarn.lock', 'Cargo.lock']):
-                    candidates.append(gf)
-    except Exception:
-        pass
+        resolved = path.resolve(strict=True)
+        relative = resolved.relative_to(root)
+    except (ValueError, OSError):
+        return False
+    if path.is_symlink() or any(part.startswith(".") for part in relative.parts):
+        return False
+    if resolved.suffix not in {".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java", ".cs"}:
+        return False
+    if any(word in str(relative).lower() for word in ("test", "spec", "fixture", "node_modules", "vendor", "venv")):
+        return False
+    return subprocess.run(["git", "ls-files", "--error-unmatch", "--", str(relative)],
+                          capture_output=True).returncode == 0
 
-    return candidates
+
+def _extract_failing_files(error_output: str) -> List[str]:
+    matches = re.findall(r'([a-zA-Z0-9_\-./\\]+\.(?:ts|tsx|js|jsx|py|go|rs|java|cs))', error_output)
+    return list(dict.fromkeys(path for path in matches if safe_repair_path(path)))
+
 
 def _attempt_file_patch(filepath: str, error_trace: str, vuln: Dict, plan: MigrationPlan, model_name: str, provider: str) -> bool:
     """Reads file, requests targeted fix from LLM, and writes back cleanly."""
+    if not safe_repair_path(filepath):
+        return False
     try:
         with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
             current_code = f.read()
@@ -644,7 +650,7 @@ def _attempt_file_patch(filepath: str, error_trace: str, vuln: Dict, plan: Migra
     breaking_text = "\n".join([f"- Replace `{b.old_call}` with `{b.new_call}`: {b.notes}" for b in plan.breaking_changes])
 
     prompt = (
-        f"You are the GreenPR Autonomous Remediation Engine by tech49labs.\n"
+        f"You are the GreenPR dependency remediation engine.\n"
         f"Package '{pkg}' was upgraded to version '{target_ver}'.\n"
         f"The compiler/test suite failed with this error:\n"
         f"```\n{error_trace[:4000]}\n```\n\n"
@@ -685,12 +691,13 @@ def _run_with_heartbeat(cmd: str, label: str, cwd: Optional[str] = None, timeout
 
     try:
         with tempfile.TemporaryFile() as out_f, tempfile.TemporaryFile() as err_f:
-            proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True, cwd=cwd)
+            proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, shell=True, cwd=cwd, start_new_session=os.name != "nt")
             while proc.poll() is None:
                 time.sleep(0.5)
                 elapsed = int(time.time() - t0)
                 if elapsed >= timeout:
                     _kill_process_tree(proc.pid)
+                    proc.wait(timeout=10)
                     sys.stdout.write(f"\r        • {label} [TIMEOUT after {timeout}s]\n")
                     sys.stdout.flush()
                     return subprocess.CompletedProcess(args=cmd, returncode=124, stdout=b"", stderr=b"Verification gate timed out.")
@@ -713,123 +720,57 @@ def _run_with_heartbeat(cmd: str, label: str, cwd: Optional[str] = None, timeout
         return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b"", stderr=str(e).encode('utf-8'))
 
 def resolve_package_bump_command(vuln: Dict, profile: Dict) -> Tuple[str, str]:
-    """
-    Dispatches package bump to the correct package manager and working directory.
-    Returns: (command_string, working_directory)
-    """
-    pkg = vuln["package"]
-    ver = vuln["target_version"]
-    ecosystem = vuln.get("ecosystem", "").lower()
-    wdir = vuln.get("working_dir", ".")
-    is_direct = vuln.get("is_direct", True)
-    subproject = vuln.get("subproject", "(root)")
-    dep_type = vuln.get("dep_type", "dependencies")
+    from engine.npm import update
+    if vuln.get("ecosystem", "").lower() != "npm":
+        from engine.adapters import update as polyglot_update
+        return polyglot_update(vuln)
+    if not vuln.get("is_direct", True):
+        raise ValueError("Transitive overrides require manual review")
+    return update(vuln["package"], vuln["target_version"])
 
-    # 1. NPM / JavaScript Ecosystem
-    if ecosystem == "npm" or "npm" in ecosystem:
-        # A. Direct dependency declared in workspace or root: update manifest + lockfile-only sync
-        if is_direct:
-            target_pj = os.path.join(wdir, "package.json") if wdir not in (".", "") else "package.json"
-            if os.path.exists(target_pj):
-                try:
-                    with open(target_pj, "r", encoding="utf-8") as f:
-                        pj = json.load(f)
-                    section = dep_type if dep_type in pj else ("devDependencies" if "devDependencies" in pj and pkg in pj.get("devDependencies", {}) else "dependencies")
-                    if section not in pj:
-                        pj[section] = {}
 
-                    orig = pj[section].get(pkg, "")
-                    prefix = "^" if orig.startswith("^") else ("~" if orig.startswith("~") else "")
-                    pj[section][pkg] = f"{prefix}{ver}"
-
-                    with open(target_pj, "w", encoding="utf-8") as f:
-                        json.dump(pj, f, indent=2)
-
-                    if os.path.exists("pnpm-lock.yaml") or os.path.exists("pnpm-workspace.yaml"):
-                        return "pnpm install --lockfile-only", "."
-                    elif os.path.exists("yarn.lock"):
-                        return "yarn install", "."
-                    elif os.path.exists("bun.lock") or os.path.exists("bun.lockb"):
-                        return "bun install", "."
-                    else:
-                        return "npm install --package-lock-only", "."
-                except Exception:
-                    pass
-
-        # B. Transitive dependency: Apply native overrides/resolutions to root manifest + lockfile-only sync
-        if os.path.exists("package.json"):
-            try:
-                with open("package.json", "r", encoding="utf-8") as f:
-                    pj = json.load(f)
-                if os.path.exists("pnpm-lock.yaml") or os.path.exists("pnpm-workspace.yaml"):
-                    if "pnpm" not in pj:
-                        pj["pnpm"] = {}
-                    if "overrides" not in pj["pnpm"]:
-                        pj["pnpm"]["overrides"] = {}
-                    pj["pnpm"]["overrides"][pkg] = ver
-                    with open("package.json", "w", encoding="utf-8") as f:
-                        json.dump(pj, f, indent=2)
-                    return "pnpm install --lockfile-only", "."
-                elif os.path.exists("yarn.lock"):
-                    if "resolutions" not in pj:
-                        pj["resolutions"] = {}
-                    pj["resolutions"][pkg] = ver
-                    with open("package.json", "w", encoding="utf-8") as f:
-                        json.dump(pj, f, indent=2)
-                    return "yarn install", "."
-                else:
-                    if "overrides" not in pj:
-                        pj["overrides"] = {}
-                    pj["overrides"][pkg] = ver
-                    with open("package.json", "w", encoding="utf-8") as f:
-                        json.dump(pj, f, indent=2)
-                    return "npm install --package-lock-only", "."
-            except Exception:
-                pass
-
-        return f"npm install --save-dev {pkg}@{ver}", "." 
-
-    # 2. PyPI / Python Ecosystem
-    if ecosystem in ("pypi", "python"):
-        if os.path.exists(os.path.join(wdir, "poetry.lock")) or os.path.exists("poetry.lock"):
-            return f"poetry add {pkg}=={ver}", wdir
-        elif shutil.which("uv"):
-            return f"uv pip install {pkg}=={ver}", wdir
+def verify_updated_target(vuln: Dict) -> bool:
+    from engine.npm import validate_target
+    try:
+        if vuln.get("ecosystem", "").lower() == "npm":
+            owners = validate_target(vuln["package"], vuln["target_version"])
         else:
-            return f"pip install {pkg}=={ver}", wdir
+            from engine.adapters import validate_target as validate_polyglot
+            owners = validate_polyglot(vuln)
+        from engine.scanner import scan_source
+        payload = scan_source()
+        for result in payload["results"]:
+            for package in result.get("packages", []):
+                info = package.get("package", {})
+                if info.get("name") == vuln["package"] and info.get("ecosystem", "").lower() == vuln.get("ecosystem", "").lower() and package.get("vulnerabilities"):
+                    raise ValueError("Target package still has reported vulnerabilities")
+        vuln["verified_owners"] = owners
+        vuln["post_update_scan"] = "no_reported_target_vulnerabilities"
+        return True
+    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        print(f"[ERROR] Target verification failed: {exc}")
+        return False
 
-    # 3. Go Ecosystem
-    if ecosystem == "go":
-        return f"go get {pkg}@{ver} && go mod tidy", wdir
-
-    # 4. Cargo / Rust Ecosystem
-    if ecosystem in ("crates.io", "cargo", "rust"):
-        return f"cargo update -p {pkg} --precise {ver}", wdir
-
-    return profile["bump_cmd"](pkg, ver, wdir), wdir
 
 def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified_gate: str, baseline_dur: float = 30.0, verbose: bool = False) -> bool:
-    """Applies package upgrade and enforces deterministic verification gates with 100% native healing."""
+    """Apply one update and require the selected verification command to pass."""
     pkg = vuln["package"]
     target_ver = vuln["target_version"]
     
-    bump_cmd_str, target_cwd = resolve_package_bump_command(vuln, profile)
+    try:
+        bump_cmd_str, target_cwd = resolve_package_bump_command(vuln, profile)
+    except (ValueError, OSError) as exc:
+        print(f"[ERROR] Update refused: {exc}")
+        return False
     sys.stdout.write(f"        • Manifest: updating {pkg} to {target_ver}...")
     sys.stdout.flush()
-    try:
-        if verbose:
-            subprocess.run(bump_cmd_str, check=True, shell=True, cwd=target_cwd)
-        else:
-            proc = subprocess.run(bump_cmd_str, capture_output=True, text=False, shell=True, cwd=target_cwd)
-            if proc.returncode != 0:
-                sys.stdout.write(f" ✖ FAILED\n")
-                err_msg = proc.stderr.decode('utf-8', errors='replace').strip()[:200]
-                print(f"          [ERROR] {err_msg}")
-                return False
-        sys.stdout.write(f" done\n")
-    except subprocess.CalledProcessError as e:
-        sys.stdout.write(f" ✖ FAILED\n")
-        print(f"          [ERROR] {e}")
+    install = _run_with_heartbeat(bump_cmd_str, "Install updated dependency", cwd=target_cwd, timeout=300)
+    if verbose:
+        print((install.stdout or b"").decode("utf-8", errors="replace"))
+        print((install.stderr or b"").decode("utf-8", errors="replace"))
+    if install.returncode != 0:
+        print("[ERROR] Dependency install failed; restoring tracked edits.")
+        subprocess.run(["git", "restore", "--worktree", "--", "."], check=True)
         return False
 
     # Dynamic verification timeout based on baseline duration
@@ -838,14 +779,13 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified
     # Step A: Verified gate check with live heartbeat ticker
     initial_test = _run_with_heartbeat(verified_gate, f"Verification: {verified_gate}", timeout=gate_timeout)
     if initial_test.returncode == 0:
-        return True
+        return verify_updated_target(vuln)
     elif initial_test.returncode == 124:
-        print(f"        ✖ Verification gate timed out (>{gate_timeout}s). Rolled back cleanly.")
-        subprocess.run("git checkout .", shell=True)
-        subprocess.run("git clean -ffd", shell=True, input=b"n\n")
+        print(f"        ✖ Verification gate timed out (>{gate_timeout}s). Tracked edits restored; inspect any generated files.")
+        subprocess.run(["git", "restore", "--worktree", "--", "."], check=True)
         return False
 
-    # Print error summary for zero-hallucination transparency
+    # Display a concise failure trace.
     err_preview = (initial_test.stderr or initial_test.stdout or b'').decode('utf-8', errors='replace').strip()
     first_lines = [l for l in err_preview.splitlines() if l.strip()][:3]
     if first_lines:
@@ -853,7 +793,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified
         for line in first_lines:
             print(f"            {line[:120]}")
 
-    # Step B: Interface discrepancies detected; initiate proprietary native healing
+    # Optional model-assisted source repair.
     error_output = (initial_test.stdout or b'').decode('utf-8', errors='replace') + '\n' + (initial_test.stderr or b'').decode('utf-8', errors='replace')
     print(f"        • Healing: interface discrepancies detected, repairing...")
 
@@ -872,7 +812,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified
 
         t1_check = _run_with_heartbeat(verified_gate, "Verification (tier 1 repair)", timeout=gate_timeout)
         if t1_check.returncode == 0:
-            return True
+            return verify_updated_target(vuln)
         else:
             error_output = (t1_check.stdout or b'').decode('utf-8', errors='replace') + '\n' + (t1_check.stderr or b'').decode('utf-8', errors='replace')
 
@@ -883,11 +823,10 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified
 
         t2_check = _run_with_heartbeat(verified_gate, "Verification (tier 2 repair)", timeout=gate_timeout)
         if t2_check.returncode == 0:
-            return True
+            return verify_updated_target(vuln)
 
     # Deterministic rollback on failure
-    subprocess.run("git checkout .", shell=True)
-    subprocess.run("git clean -ffd", shell=True, input=b"n\n")
+    subprocess.run(["git", "restore", "--worktree", "--", "."], check=True)
     return False
 
 def _format_duration(seconds: float) -> str:
@@ -923,99 +862,122 @@ def _render_summary_table(results: List[Dict], total_elapsed: float, skip_pr: bo
 
     print("-" * 64)
     print("Remediation Summary:")
-    print(f"  ✔ {success_count} package(s) verified safe (100% gate pass)")
+    print(f"  ✔ {success_count} package(s) passed the configured verification command")
     if failed_count > 0:
         print(f"  ✖ {failed_count} package(s) rolled back due to test failure")
     print(f"  ⏱ Total duration: {_format_duration(total_elapsed)}")
-    mode_str = "Local working copy staged (--skip-pr)" if skip_pr else "Pull Requests published to GitHub"
+    mode_str = "Isolated worktree retained for review (--skip-pr)" if skip_pr else "Pull Requests published to GitHub"
     print(f"  Mode: {mode_str}")
     print("-" * 64 + "\n")
 
 def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False) -> bool:
-    """Submits a verified Pull Request through the delivery pipeline."""
-    pkg = vuln["package"]
-    target_ver = vuln["target_version"]
-    cve = vuln.get("cve_id", "SECURITY")
-    branch_name = f"greenpr/{pkg}-{target_ver}"
-
+    """Publish only after every Git operation succeeds; never force push."""
     if skip_pr:
         return True
-
-    subprocess.run(f"git checkout -b {branch_name}", shell=True)
-    subprocess.run("git add .", shell=True)
-    subprocess.run(f'git commit -m "fix(security): auto-remediate {pkg} to {target_ver} [{cve}]"', shell=True)
-    subprocess.run(f"git push -u origin {branch_name} --force", shell=True)
-
-    body = (
-        f"## GreenPR: Autonomous Dependency Remediation\n\n"
-        f"This Pull Request was autonomously remediated, compiled, and verified by **GreenPR Engine v1.0**.\n\n"
-        f"- **Package**: `{pkg}`\n"
-        f"- **Target Version**: `{target_ver}`\n"
-        f"- **Security Advisory**: `{cve}`\n\n"
-        f"### Verification Gate Summary\n"
-        f"- **Syntax & Compiler Check**: PASSED (Exit Code 0)\n"
-        f"- **Regression Test Suite**: PASSED (Exit Code 0)\n"
-        f"- **Deterministic Verification**: 100% verified against project test harness.\n\n"
-        f"---\n"
-        f"*Delivered autonomously by [GreenPR by tech49labs](https://github.com/tech49labs/greenpr)*\n"
-    )
-
-    pr_cmd = f'gh pr create --title "fix(security): GreenPR verified patch for {pkg} to {target_ver}" --body "{body}"'
-    proc = subprocess.run(pr_cmd, shell=True)
-    return proc.returncode == 0
+    pkg, target = vuln["package"], vuln["target_version"]
+    branch = "greenpr/" + re.sub(r"[^A-Za-z0-9._-]", "-", f"{pkg}-{target}") + f"-{time.time_ns()}"
+    body = (f"GreenPR updated `{pkg}` to `{target}`.\n\n"
+            f"Verification command: `{vuln.get('verified_gate', 'unknown')}`\n"
+            "Result: exit 0. This covers only the configured command; review the diff before merging.\n")
+    try:
+        subprocess.run(["git", "switch", "-c", branch], check=True)
+        subprocess.run(["git", "add", "--update"], check=True)
+        subprocess.run(["git", "commit", "-m", f"fix(deps): update {pkg} to {target}"], check=True)
+        subprocess.run(["git", "push", "-u", "origin", branch], check=True)
+        with tempfile.TemporaryDirectory(prefix="greenpr-pr-") as tmp:
+            body_path = os.path.join(tmp, "body.md")
+            with open(body_path, "w", encoding="utf-8") as f:
+                f.write(body)
+            subprocess.run(["gh", "pr", "create", "--title", f"fix(deps): update {pkg} to {target}",
+                            "--body-file", body_path], check=True)
+        return True
+    except (subprocess.CalledProcessError, OSError) as exc:
+        print(f"[ERROR] PR delivery failed; local changes preserved: {exc}")
+        return False
 
 
 # ==============================================================================
 # Main Orchestrator Execution
 # ==============================================================================
 
-def main():
-    parser = argparse.ArgumentParser(description="GreenPR Enterprise: Autonomous Dependency Remediation Engine by tech49labs")
-    parser.add_argument("--test-cmd", type=str, default=None, help="Custom command to run test suite")
+def _run_current_checkout():
+    parser = argparse.ArgumentParser(description="GreenPR: dependency updates checked against your verification command")
+    parser.add_argument("--test-cmd", action="append", default=None, help="Required verification command; repeat to require multiple commands")
+    parser.add_argument("--project", default=".", help="Project directory relative to the repository root")
     parser.add_argument("--package", type=str, default=None, help="Target specific package (skips full scan)")
     parser.add_argument("--target-version", type=str, default=None, help="Target version for specific package")
-    parser.add_argument("--limit", type=int, default=None, help="Maximum number of packages to remediate")
-    parser.add_argument("--skip-pr", action="store_true", help="Stage changes locally without pushing a remote PR")
+    parser.add_argument("--limit", type=int, default=1, help="One package per run; repeat after reviewing the result")
+    parser.add_argument("--skip-pr", action="store_true", help="Retain a separate review worktree with patch and result receipt without publishing a PR")
     parser.add_argument("--dry-run", "--scan-only", dest="dry_run", action="store_true", help="Scan and display discovered vulnerabilities without modifying files")
+    parser.add_argument("--enable-model-repair", action="store_true", help="Allow source and error traces to be sent to a configured model provider")
+    parser.add_argument("--commercial", action="store_true", help="Verify a paid license for this GitHub origin before execution")
     parser.add_argument("--verbose", action="store_true", help="Display full verbose package manager output")
-    parser.add_argument("--ecosystem", type=str, default=None, help="Filter by ecosystem (npm, pypi, go, crates.io, all)")
+    parser.add_argument("--ecosystem", type=str, default=None, choices=["npm", "pypi", "go", "crates.io", "maven", "nuget", "all"], help="Filter by ecosystem (npm, pypi, go, crates.io, all)")
     args = parser.parse_args()
+    os.environ["GREENPR_ENABLE_MODEL_REPAIR"] = "1" if args.enable_model_repair else "0"
+
+    if bool(args.package) != bool(args.target_version):
+        parser.error("--package and --target-version must be supplied together")
+    if args.limit != 1:
+        parser.error("This release supports one remediation per run (--limit 1)")
+    if not args.dry_run:
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True)
+        root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+        if status.returncode or status.stdout.strip() or root.returncode:
+            parser.error("Run from a clean Git repository root; commit or move existing changes first")
 
     profiles = discover_repository_profiles(".")
     if not profiles:
         print("[ERROR] GreenPR: Unsupported project environment.")
         sys.exit(1)
 
+    if args.ecosystem and args.ecosystem.lower() != "all":
+        requested = args.ecosystem.lower()
+        matching = [p for p in LANGUAGE_PROFILES.values() if requested in p["ecosystems"] and p["detect"](".")]
+        if not matching and not args.dry_run:
+            parser.error("Selected ecosystem is not at this project root; use --project for its directory")
+        if matching:
+            profiles.insert(0, matching[0])
+    if args.ecosystem == "all" and not args.dry_run:
+        parser.error("Select one ecosystem/project for remediation; --ecosystem all is scan-only")
     primary_profile = profiles[0]
+    root_profile = get_profile_for_dir(".")
+    if not args.dry_run and not args.test_cmd and root_profile and primary_profile["ecosystems"] != root_profile["ecosystems"]:
+        parser.error("Mixed manifests at one root require explicit --test-cmd gates for the selected ecosystem")
     if len(profiles) > 1:
         lang_names = ", ".join([p["name"].split(" ")[0] for p in profiles])
         profile_label = f"Polyglot Monorepo ({lang_names})"
     else:
         profile_label = primary_profile["name"]
 
-    print(f"GreenPR Dependency Remediation Engine v1.0 | tech49labs")
+    print("GreenPR Dependency Remediation Engine v1.0")
     print(f"Target:         {os.getcwd()}")
     print(f"Active Profile: {profile_label}")
 
     # Step 0: Autonomous Baseline Sanity Gate Check (Mandatory Pre-flight)
-    verified_gate, baseline_dur = probe_and_select_verification_gate(".", custom_cmd=args.test_cmd)
-    if not verified_gate:
+    verified_gate, baseline_dur = ("", 0.0) if args.dry_run else probe_and_select_verification_gate(".", custom_cmd=" && ".join(args.test_cmd) if args.test_cmd else None)
+    if not verified_gate and not args.dry_run:
         print("\n[ERROR] GreenPR: Cannot proceed. No passing verification gates found on clean repository.")
-        print("GreenPR guarantees zero-hallucination PRs by verifying updates against a passing gate.")
+        print("The selected verification command must pass before updates begin.")
         print("Please resolve baseline test/typecheck failures on your branch before running remediation.\n")
         sys.exit(1)
+
+    if not args.dry_run:
+        after_baseline = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True, check=True)
+        if after_baseline.stdout.strip():
+            parser.error("Baseline modified the checkout; review its changes before continuing")
 
     # Determine target ecosystems
     if args.ecosystem:
         target_ecos = None if args.ecosystem.lower() == "all" else [args.ecosystem.lower()]
     else:
-        if len(profiles) > 1:
-            target_ecos = None
-        else:
-            target_ecos = primary_profile.get("ecosystems")
+        target_ecos = None if args.dry_run else primary_profile.get("ecosystems")
 
     if args.package and args.target_version:
-        owner_dir, subproj, is_direct, dep_type, decl_ver = locate_package_owner(args.package, ".")
+        if target_ecos and target_ecos[0].lower() != "npm":
+            owner_dir, subproj, is_direct, dep_type, decl_ver = ".", ".", True, None, None
+        else:
+            owner_dir, subproj, is_direct, dep_type, decl_ver = locate_package_owner(args.package, ".")
         vulnerabilities = [{
             "package": args.package,
             "target_version": args.target_version,
@@ -1028,10 +990,14 @@ def main():
             "ecosystem": (target_ecos[0] if target_ecos else "npm")
         }]
     else:
-        vulnerabilities = run_vulnerability_radar(active_ecosystems=target_ecos)
+        try:
+            vulnerabilities = run_vulnerability_radar(active_ecosystems=target_ecos)
+        except RuntimeError as exc:
+            print(f"[ERROR] {exc}")
+            sys.exit(1)
 
     if not vulnerabilities:
-        print(f"\n✔ All {profile_label} dependencies are verified and clean.\n")
+        print(f"\n✔ No actionable updates found in this scan. This is not a security certification.\n")
         sys.exit(0)
 
     # De-duplicate packages per (subproject, package)
@@ -1071,18 +1037,22 @@ def main():
         pkg_dur = time.time() - pkg_start
 
         if success:
-            create_pull_request(vuln, plan, skip_pr=args.skip_pr)
-            print(f"        ✔ Verified safe for production ({pkg_dur:.1f}s)\n")
+            vuln["verified_gate"] = verified_gate
+            if not create_pull_request(vuln, plan, skip_pr=args.skip_pr):
+                sys.exit(1)
+            print(f"        ✔ Configured verification passed ({pkg_dur:.1f}s)\n")
             results.append({
                 "package": pkg,
                 "project": subproj,
                 "from": cur,
                 "to": tgt,
                 "status": "SUCCESS",
+                "verified_owners": vuln.get("verified_owners", []),
+                "post_update_scan": vuln.get("post_update_scan"),
                 "duration": pkg_dur
             })
         else:
-            print(f"        ✖ Verification gate failed. Rolled back cleanly ({pkg_dur:.1f}s)\n")
+            print(f"        ✖ Remediation failed. Inspect the retained worktree and result receipt ({pkg_dur:.1f}s)\n")
             results.append({
                 "package": pkg,
                 "project": subproj,
@@ -1094,6 +1064,61 @@ def main():
 
     total_time = time.time() - start_total_time
     _render_summary_table(results, total_time, args.skip_pr)
+    if any(r["status"] != "SUCCESS" for r in results):
+        sys.exit(1)
+    return {"updates": results, "verification_command": verified_gate, "baseline_seconds": baseline_dur}
+
+def main():
+    from engine.runtime import isolated_checkout
+    from pathlib import Path
+    if any(flag in sys.argv[1:] for flag in ("--help", "-h")):
+        return _run_current_checkout()
+    selection = argparse.ArgumentParser(add_help=False)
+    selection.add_argument("--project", default=".")
+    selection.add_argument("--ecosystem", default=None)
+    selected, _ = selection.parse_known_args()
+    original = Path.cwd().resolve()
+    project = (original / selected.project).resolve()
+    if not project.is_relative_to(original) or not project.is_dir():
+        print("[ERROR] Project must stay inside the repository", file=sys.stderr)
+        raise SystemExit(2)
+    if "--commercial" in sys.argv[1:]:
+        from engine.license import validate_commercial_license
+        try:
+            validate_commercial_license()
+        except ValueError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            raise SystemExit(2) from exc
+    if any(flag in sys.argv[1:] for flag in ("--scan-only", "--dry-run")):
+        try:
+            os.chdir(project)
+            return _run_current_checkout()
+        finally:
+            os.chdir(original)
+    original_environment = dict(os.environ)
+    try:
+        with isolated_checkout() as receipt:
+            from engine.adapters import prepare_baseline
+            project = (Path.cwd() / selected.project).resolve()
+            if not project.is_relative_to(Path.cwd().resolve()) or not project.is_dir():
+                raise RuntimeError("Project must stay inside the repository")
+            os.chdir(project)
+            command = prepare_baseline(Path(receipt["worktree"]).parent, selected.ecosystem)
+            if command:
+                install = _run_with_heartbeat(command, "Install baseline dependencies", timeout=300)
+                if install.returncode:
+                    raise RuntimeError("Baseline dependency install failed")
+            result = _run_current_checkout()
+            if isinstance(result, dict):
+                receipt.update(result)
+            return result
+    except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    finally:
+        os.environ.clear()
+        os.environ.update(original_environment)
+
 
 if __name__ == "__main__":
     main()
