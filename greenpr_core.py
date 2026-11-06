@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import hashlib
 import json
 import os
@@ -16,6 +17,8 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+
+import yaml
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
@@ -34,12 +37,13 @@ class CommandResult:
     stderr: str = ""
     seconds: float = 0
     truncated: bool = False
+    cwd: str | None = None
 
     def evidence(self):
         # Never persist raw process output: it can contain project secrets.
         command = self.command if isinstance(self.command, list) else {
             "kind": "user_shell_command", "sha256": hashlib.sha256(self.command.encode()).hexdigest()}
-        return {"command": command, "exit_code": self.returncode,
+        return {"command": command, "exit_code": self.returncode, "working_directory": self.cwd,
                 "seconds": round(self.seconds, 3), "output_truncated": self.truncated}
 
 
@@ -49,12 +53,17 @@ def run(command, *, cwd, timeout=180, env=None, shell=False, max_output=2_000_00
         raise ValueError("Only explicit user test commands may use a shell")
     start = time.monotonic()
     executable_command = command
-    if os.name == "nt" and isinstance(command, list) and command[0] == "npm":
-        npm = shutil.which("npm")
-        npm_cli = Path(npm).parent / "node_modules/npm/bin/npm-cli.js" if npm else Path("missing-npm")
-        if not npm_cli.is_file():
-            raise GreenPRError("Windows npm requires Node's npm-cli.js installation")
-        executable_command = ["node", str(npm_cli), *command[1:]]
+    if os.name == "nt" and isinstance(command, list) and command[0] in ("npm", "pnpm", "yarn"):
+        manager = command[0]
+        resolved = shutil.which(manager)
+        if resolved and Path(resolved).suffix.lower() in (".cmd", ".bat", ".ps1"):
+            scripts = {"npm": ["node_modules/npm/bin/npm-cli.js"],
+                       "pnpm": ["node_modules/pnpm/bin/pnpm.cjs", "node_modules/corepack/dist/pnpm.js"],
+                       "yarn": ["node_modules/yarn/bin/yarn.js", "node_modules/corepack/dist/yarn.js"]}[manager]
+            entry = next((Path(resolved).parent / s for s in scripts if (Path(resolved).parent / s).is_file()), None)
+            if entry is None:
+                raise GreenPRError(f"Cannot safely resolve the Windows {manager} Node entry point")
+            executable_command = ["node", str(entry), *command[1:]]
     kwargs = {"start_new_session": True} if os.name != "nt" else {
         "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | 0x4}  # CREATE_SUSPENDED
     job = None
@@ -130,7 +139,7 @@ def run(command, *, cwd, timeout=180, env=None, shell=False, max_output=2_000_00
         raise GreenPRError("Unable to stop a child holding command output; inspect runner processes")
     return CommandResult(command, 124 if timed_out else proc.returncode,
                          *(bytes(b).decode("utf-8", "replace") for b in buffers),
-                         time.monotonic() - start, any(truncated))
+                         time.monotonic() - start, any(truncated), str(cwd))
 
 
 def checked(command, cwd, **kwargs):
@@ -364,6 +373,7 @@ class UpdatePlan:
     tests: list[list[str] | str]
     env: dict | None = None
     setup: list[list[str]] = field(default_factory=list)
+    test_directories: list[Path] = field(default_factory=list)
 
 
 def node_manager(directory):
@@ -375,6 +385,123 @@ def node_manager(directory):
     return found.pop()
 
 
+def node_checks(data, manager):
+    """Select meaningful gates without falling back after a failed required gate."""
+    scripts = data.get("scripts", {})
+    names = [name for name in ("typecheck", "test") if name in scripts]
+    if "test" not in scripts:
+        names += [name for name in ("test:unit", "test:ci") if name in scripts]
+    if not names and "build" in scripts:
+        names = ["build"]
+    return [[manager, "run", name] for name in names]
+
+
+def workspace_manifests(root, directory, data):
+    """Only declared workspace members belong to a shared lockfile, never arbitrary nested projects."""
+    config_file = inside(root, directory / "pnpm-workspace.yaml")
+    config = None
+    if config_file.exists():
+        # Duplicate keys are ambiguous and should not be silently overwritten.
+        class UniqueLoader(yaml.SafeLoader):
+            pass
+        def mapping(loader, node, deep=False):
+            values = {}
+            for key_node, value_node in node.value:
+                key = loader.construct_object(key_node, deep=deep)
+                if key in values:
+                    raise GreenPRError("Duplicate pnpm workspace setting requires manual review")
+                values[key] = loader.construct_object(value_node, deep=deep)
+            return values
+        UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+        try:
+            config = yaml.load(config_file.read_text(encoding="utf-8"), Loader=UniqueLoader)
+        except yaml.YAMLError as exc:
+            raise GreenPRError("Invalid pnpm workspace configuration") from exc
+        if not isinstance(config, dict):
+            raise GreenPRError("pnpm workspace configuration must be an object")
+        patterns = config.get("packages", [])
+    else:
+        patterns = data.get("workspaces", [])
+        if isinstance(patterns, dict):
+            patterns = patterns.get("packages", [])
+    if not isinstance(patterns, list) or any(not isinstance(p, str) for p in patterns):
+        raise GreenPRError("Unsupported workspace member patterns")
+    members, exclusions = set(), []
+    for pattern in patterns:
+        excluding = pattern.startswith("!")
+        pattern = pattern.removeprefix("!").removeprefix("./")
+        if not pattern or Path(pattern).is_absolute() or ".." in Path(pattern).parts or any(c in pattern for c in "{}\\"):
+            raise GreenPRError("Unsupported or unsafe workspace glob; use simple relative patterns")
+        if excluding:
+            exclusions.append(pattern)
+        else:
+            for match in directory.glob(pattern):
+                member = inside(root, match)
+                if any(part in ("node_modules", ".git", ".venv") for part in member.relative_to(directory).parts):
+                    continue
+                if member.is_dir() and (member / "package.json").is_file():
+                    members.add(inside(root, member / "package.json"))
+    manifests = [inside(root, directory / "package.json")]
+    manifests += sorted(p for p in members if p not in manifests and not any(
+        fnmatch.fnmatchcase(p.parent.relative_to(directory).as_posix(), pattern) for pattern in exclusions))
+    return manifests, config_file, config
+
+
+def node_update_plan(root, directory, package, target, custom_tests):
+    manifest = inside(root, directory / "package.json")
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise GreenPRError("Invalid package.json")
+    manager = node_manager(directory)
+    if not shutil.which(manager):
+        raise GreenPRError(f"Required package manager not found: {manager}")
+    manifests, workspace_file, workspace_config = workspace_manifests(root, directory, data)
+    projects = {p: json.loads(p.read_text(encoding="utf-8")) for p in manifests}
+    owners = [(p, section) for p, doc in projects.items()
+              for section in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+              if package in doc.get(section, {})]
+    if len(owners) > 1 or (owners and owners[0][1] == "peerDependencies"):
+        raise GreenPRError("Ambiguous or peer-only workspace dependency ownership requires manual review")
+    files = {}
+    owner = directory
+    if owners:
+        path, section = owners[0]
+        owner = path.parent
+        declared = projects[path][section][package]
+        if not isinstance(declared, str) or any(c in declared for c in (":", "/", "\\")):
+            raise GreenPRError("Local or aliased dependency declaration requires manual review")
+        projects[path][section][package] = target
+        files[path] = json.dumps(projects[path], indent=2) + "\n"
+    else:
+        # Preserve transitive support without adding the package as a new direct dependency.
+        # Existing override policies may affect a different subtree; never replace them implicitly.
+        if manager == "pnpm":
+            if workspace_config is None or workspace_config.get("overrides") or data.get("pnpm", {}).get("overrides"):
+                raise GreenPRError("Transitive pnpm repair needs an existing workspace file without override policies")
+            if "overrides" in workspace_config:
+                raise GreenPRError("Existing pnpm override block requires manual review")
+            files[workspace_file] = workspace_file.read_text(encoding="utf-8").rstrip() + "\n\noverrides:\n  " + json.dumps(package) + ": " + json.dumps(target) + "\n"
+        elif manager in ("npm", "bun", "yarn"):
+            field = "resolutions" if manager == "yarn" else "overrides"
+            if data.get(field):
+                raise GreenPRError("Existing transitive override policy requires manual review")
+            data[field] = {package: target}
+            files[manifest] = json.dumps(data, indent=2) + "\n"
+    commands = {"npm": [["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"]],
+                "pnpm": [["pnpm", "install", "--no-frozen-lockfile", "--ignore-scripts"]],
+                "yarn": [["yarn", "install", "--ignore-scripts"]],
+                "bun": [["bun", "install", "--ignore-scripts"]]}[manager]
+    tests = list(custom_tests) or node_checks(data, manager)
+    if not tests:
+        raise GreenPRError("No verification gate at the lockfile root; provide --test-cmd")
+    test_directories = [directory] * len(tests)
+    if owner != directory:
+        owner_checks = node_checks(projects[owner / "package.json"], manager)
+        tests += owner_checks
+        test_directories += [owner] * len(owner_checks)
+    return UpdatePlan(directory, files, commands, tests, test_directories=test_directories)
+
+
 def plan_update(root: Path, finding, temp: Path, custom_tests=()):
     directory = inside(root, finding["working_dir"])
     source = inside(root, finding["manifest_path"])
@@ -383,30 +510,7 @@ def plan_update(root: Path, finding, temp: Path, custom_tests=()):
         raise GreenPRError("No proven stable forward fix; manual review required")
     ecosystem = finding["ecosystem"]
     if ecosystem == "npm":
-        manifest = inside(root, directory / "package.json")
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-        if data.get("workspaces") or (directory / "pnpm-workspace.yaml").exists():
-            raise GreenPRError("Shared workspace lockfiles require a coordinated manual update")
-        manager = node_manager(directory)
-        if not shutil.which(manager):
-            raise GreenPRError(f"Required package manager not found: {manager}")
-        if os.name == "nt" and manager != "npm":
-            raise GreenPRError("Windows auto-remediation currently supports npm; other managers require a Linux runner")
-        fields = [f for f in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
-                  if package in data.get(f, {})]
-        if len(fields) != 1 or fields[0] == "peerDependencies":
-            raise GreenPRError("Only unambiguous direct non-peer dependencies can be updated automatically")
-        # Edit the same manifest section; never promote transitive dependencies to direct/dev.
-        data[fields[0]][package] = target
-        commands = {"npm": [["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"]],
-                    "pnpm": [["pnpm", "install", "--no-frozen-lockfile", "--ignore-scripts"]],
-                    "yarn": [["yarn", "install", "--ignore-scripts"]],
-                    "bun": [["bun", "install", "--ignore-scripts"]]}[manager]
-        scripts = data.get("scripts", {})
-        tests = list(custom_tests) or [[manager, "run", name] for name in ("typecheck", "test") if name in scripts]
-        if not tests:
-            raise GreenPRError("No test or typecheck script; provide --test-cmd")
-        return UpdatePlan(directory, {manifest: json.dumps(data, indent=2) + "\n"}, commands, tests)
+        return node_update_plan(root, directory, package, target, custom_tests)
     if ecosystem == "pypi":
         if source.name != "requirements.txt" or any((directory / name).exists() for name in ("pyproject.toml", "poetry.lock", "uv.lock")):
             raise GreenPRError("Automatic Python updates currently require plain requirements.txt; managed lockfiles need manual review")
@@ -457,8 +561,11 @@ def apply_plan(plan, timeout, evidence):
 
 def run_tests(plan, timeout, evidence, stage="verification"):
     failed = []
-    for command in plan.tests:
-        result = run(command, cwd=plan.cwd, env=plan.env, timeout=timeout, shell=isinstance(command, str))
+    directories = plan.test_directories or [plan.cwd] * len(plan.tests)
+    if len(directories) != len(plan.tests):
+        raise GreenPRError("Verification command/directory mismatch")
+    for command, directory in zip(plan.tests, directories):
+        result = run(command, cwd=directory, env=plan.env, timeout=timeout, shell=isinstance(command, str))
         evidence.append({"stage": stage, **result.evidence()})
         if result.returncode:
             failed.append(result)

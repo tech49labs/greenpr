@@ -1,1 +1,2 @@
 packaging>=23.0,<27
+PyYAML>=6.0,<7

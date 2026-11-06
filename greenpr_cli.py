@@ -14,7 +14,7 @@ def parser():
     p = argparse.ArgumentParser(description="GreenPR: isolated dependency remediation with reviewable evidence")
     p.add_argument("--repo", type=Path, default=Path.cwd(), help="Target Git repository root")
     p.add_argument("--preflight", action="store_true", help="Read-only prerequisite checks; no scan or package execution")
-    p.add_argument("--dry-run", action="store_true", help="Scan committed HEAD and report plans; do not install, test, or deliver")
+    p.add_argument("--dry-run", "--scan-only", dest="dry_run", action="store_true", help="Scan committed HEAD and report plans; do not install, test, or deliver")
     p.add_argument("--skip-pr", action="store_true", help="Keep verified commits on new local branches; leave caller checkout unchanged")
     p.add_argument("--test-cmd", action="append", default=[], help="Trusted shell test command; repeat for multiple required checks")
     p.add_argument("--timeout", type=int, default=180, help="Timeout in seconds for each subprocess")

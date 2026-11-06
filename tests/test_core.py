@@ -116,12 +116,14 @@ def test_runtime_category_and_both_checks_preserved(repo, finding, tmp_path):
     assert all("--save-dev" not in c for c in plan.commands)
 
 
-def test_transitive_and_workspace_dependencies_refused(repo, finding, tmp_path):
+def test_transitive_update_preserves_direct_dependencies(repo, finding, tmp_path):
     (repo / "package.json").write_text('{"dependencies":{},"scripts":{"test":"test"}}')
-    with pytest.raises(core.GreenPRError, match="direct"):
-        core.plan_update(repo, finding, tmp_path)
-    (repo / "package.json").write_text('{"workspaces":["packages/*"]}')
-    with pytest.raises(core.GreenPRError, match="workspace"):
+    plan = core.plan_update(repo, finding, tmp_path)
+    updated = json.loads(plan.files[repo / "package.json"])
+    assert updated["dependencies"] == {}
+    assert updated["overrides"] == {"demo": "1.2.0"}
+    (repo / "package.json").write_text('{"overrides":{"other":"1.0.0"},"scripts":{"test":"test"}}')
+    with pytest.raises(core.GreenPRError, match="override"):
         core.plan_update(repo, finding, tmp_path)
 
 

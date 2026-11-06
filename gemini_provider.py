@@ -202,7 +202,13 @@ class GeminiHealer:
     def __call__(self, root, cwd, failed, finding, stage, evidence):
         errors = "\n".join(r.stdout + "\n" + r.stderr for r in failed)
         errors = errors.replace(self.client.config.credential, "[REDACTED]")
-        candidates = source_candidates(root, cwd, errors)
+        candidates = []
+        for failure in failed:
+            failure_dir = Path(failure.cwd) if failure.cwd else cwd
+            for candidate in source_candidates(root, failure_dir, failure.stdout + "\n" + failure.stderr):
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        candidates = candidates[:2]
         if not candidates:
             raise GreenPRError("No permitted source file found in diagnostics; manual repair required")
         originals = {rel: inside(root, rel).read_text(encoding="utf-8") for rel in candidates}

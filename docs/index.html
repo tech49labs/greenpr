@@ -352,8 +352,8 @@
     <section id="monorepo">
       <div class="section-label">Current coverage</div>
       <h2>Scan broadly. Automate supported updates.</h2>
-      <p class="intro">OSV scans nested manifests. Automatic updates currently cover unambiguous direct Node dependencies with a colocated lockfile and plain, exactly pinned Python requirements.txt files. Dependency categories are preserved.</p>
-      <p>Shared-workspace lockfiles, transitive-only and peer dependencies, managed Python lockfiles, Go, Rust, Java, .NET, and submodules need manual repair in this safety revision. Unsupported findings remain in the report. Node lifecycle scripts are disabled during installs.</p>
+      <p class="intro">OSV scans nested manifests. Automatic updates cover unambiguous Node dependencies and declared workspaces, guarded transitive overrides, and plain, exactly pinned Python requirements.txt files. Dependency categories are preserved.</p>
+      <p>Ambiguous workspace ownership, existing override policies, peer dependencies, managed Python lockfiles, Go, Rust, Java, .NET, and submodules need manual repair. Unsupported findings remain in the report. Node lifecycle scripts are disabled during installs. Workspace verification runs required root checks and available owner checks in their respective directories.</p>
       <p>Both Node typecheck and test scripts run when available. Python uses a private temporary environment. You can specify additional trusted test commands. Git worktrees are not a security sandbox for untrusted code.</p>
     </section>
     <section id="quickstart">

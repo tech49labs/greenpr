@@ -31,12 +31,13 @@ OSV-Scanner recursively inventories supported manifests, including nested projec
 
 | Dependency form | Automatic update policy |
 | --- | --- |
-| Node direct dependencies | Preserve dependencies/devDependencies/optionalDependencies; update manifest and colocated lockfile together. npm on Windows/Linux; pnpm, Yarn classic, Bun on Linux require installed tooling. |
+| Node direct dependencies and declared workspaces | Preserve dependencies/devDependencies/optionalDependencies; update the unique owner manifest and shared lockfile together. npm, pnpm, Yarn classic, and Bun require installed tooling; supported Windows wrappers use their Node entry point. |
+| Transitive Node dependencies | Add a root override/resolution without promoting the package to a direct dependency. Existing override policies require manual review; pnpm uses an existing pnpm-workspace.yaml without an override block. |
 | Plain Python requirements.txt | Exact direct pins only; persist the pin and install into a private temporary virtual environment. Include test dependencies in that file. |
-| Transitive-only, peer, shared-workspace, multiple-installed-version findings | Report for coordinated manual repair; never silently add a direct dependency. |
+| Ambiguous/multiple workspace owners, peer, local/aliased declarations, multiple-installed-version findings | Report for coordinated manual repair; never silently select the first matching owner. |
 | Poetry/uv-managed Python, hashes/includes/conditional requirements, Go, Rust, Java, .NET, submodules | Automatic repair is not verified in this safety revision. Findings remain visible; unsupported operations fail closed. |
 
-Node installation disables lifecycle scripts. Projects requiring them may fail baseline checks and need manual setup. Node auto-detection runs **both** typecheck and test when present. Python defaults to the private environment's `python -m pytest`. Supply a meaningful custom check if needed; repeat `--test-cmd` to require several checks. These trusted shell commands execute in the finding's subproject directory. Do not put secrets in commands; evidence stores custom-command hashes rather than raw text.
+Node installation disables lifecycle scripts. Projects requiring them may fail baseline checks and need manual setup. Node auto-detection runs **both** typecheck and test when present, recognizes test:unit/test:ci when test is absent, and uses build only when no test/typecheck gate is defined. It never replaces a failing required check with a weaker passing one. Shared-workspace installs run at the lockfile root; required root checks and available owner checks run in their respective directories. Python defaults to the private environment's `python -m pytest`. Supply a meaningful custom check if needed; repeat `--test-cmd` to require several checks. Custom Node workspace commands run at the lockfile root. Do not put secrets in commands; evidence stores custom-command hashes rather than raw text.
 
 ```bash
 python /path/to/greenpr/greenpr_cli.py --repo /path/to/your-project --skip-pr \
@@ -52,6 +53,8 @@ Every run prints a JSON report path outside the target repository. `--report` ac
 - **2:** dry run found vulnerabilities, or invalid arguments.
 
 `--limit`, `--ecosystem`, and `--package` restrict attempts, not the reported inventory. Deferred findings prevent complete success. `--target-version` must match the proven advisory-derived target; it cannot bypass scanning. Unfixed advisories, unsupported version ordering, prereleases, and uncertain ranges require manual review. Rescanning must observe the requested version, no remaining advisory for that package, and no new advisory identifiers. Scanner configuration and database coverage still limit what can be detected.
+
+`--scan-only` is retained as an alias for `--dry-run`. Workspace ownership follows declared npm/Yarn/Bun workspaces or pnpm package patterns (including exclusions), not an unrestricted search through unrelated projects. New declarations pin the exact validated target. Complex workspace glob forms and existing transitive override policies are refused rather than overwritten. Installation refreshes the actual dependencies used by checks, not only the lockfile.
 
 ## GitHub Actions
 
