@@ -47,14 +47,28 @@ Choose a command that includes all required checks. GreenPR does not replace a
 failed test suite with a passing build. A successful command only demonstrates
 what that command actually checked.
 
+Save the project directory and every required gate in a reviewed `.greenpr.toml`
+at your repository root. The [setup guide](https://greenpr-cw0.pages.dev/guide.html)
+describes test environment defaults, isolated setup and cleanup commands.
+Run `python /path/to/greenpr/remediate.py --doctor` to check configured prerequisites
+without installing dependencies or changing files. Configuration does not replace
+the baseline: the same complete gates must pass before and after an update.
+Additional `--test-cmd` arguments add checks to configured gates.
+
+Failed runs retain redacted command output in diagnostic files beside the review
+worktree. The `GREENPR_RESULT` receipt identifies the logs, exit codes and timings,
+and distinguishes missing configuration, missing dependencies and test failures.
+
 ## Commands and boundaries
 
 | Option | Behavior |
 | --- | --- |
 | `--scan-only` / `--dry-run` | Scan without running baseline tests, changing manifests, or calling a model. |
+| `--doctor` | Check `.greenpr.toml` prerequisites without modifying files, even in a dirty checkout. |
 | `--test-cmd "command"` | Use this exact trusted shell command for baseline and final verification. |
 | `--package NAME --target-version VERSION` | Request an explicit update; provide both options together. |
 | `--skip-pr` | Retain a separate review worktree, patch, and JSON receipt without publishing. |
+| `--skip-hosted-ci` | Explicitly add `[skip ci]` to the generated commit after local verification; required GitHub checks remain pending and merge protections remain unchanged. |
 | `--limit 1` | One package per invocation. Review it before running again. |
 | `--ecosystem npm` | Select an ecosystem; use `--scan-only --ecosystem all` for broad discovery. |
 | `--project PATH` | Select a nested project within the repository. |

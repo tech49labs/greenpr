@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import uuid
+import sys
+from engine.diagnostics import diagnostic_session, redact
 
 
 def git(*args, cwd=None):
@@ -47,23 +49,38 @@ def isolated_checkout():
         checkout = directory / "checkout"
         git("worktree", "add", "--detach", str(checkout), head)
         receipt = {"run_id": run_id, "base_sha": head, "worktree": str(checkout),
-                   "original_repository": str(original), "status": "running"}
+                   "original_repository": str(original), "status": "running",
+                   "started_at": datetime.now(timezone.utc).isoformat(), "commands": []}
         try:
             os.chdir(checkout)
-            yield receipt
+            with diagnostic_session(receipt, directory / "diagnostics"):
+                yield receipt
             receipt["status"] = "verified"
         except BaseException as exc:
             receipt["status"] = "verified" if isinstance(exc, SystemExit) and exc.code in (None, 0) else "failed"
             receipt["error_type"] = type(exc).__name__
+            receipt["error_summary"] = redact(str(exc))
             raise
         finally:
+            active_error = sys.exc_info()[1]
             os.chdir(original)
             receipt["finished_at"] = datetime.now(timezone.utc).isoformat()
-            receipt["original_head_unchanged"] = git("rev-parse", "HEAD") == head
-            patch = subprocess.run(["git", "diff", "--binary", head], cwd=checkout,
-                                   check=True, capture_output=True).stdout
-            (directory / "changes.patch").write_bytes(patch)
-            receipt["patch_sha256"] = hashlib.sha256(patch).hexdigest()
+            finalization_error = None
+            try:
+                receipt["original_head_unchanged"] = git("rev-parse", "HEAD") == head
+                original_status = git("status", "--porcelain", "--untracked-files=all")
+                receipt["original_checkout_status"] = redact(original_status)
+                receipt["original_checkout_clean"] = not original_status
+                patch = subprocess.run(["git", "diff", "--binary", head], cwd=checkout,
+                                       check=True, capture_output=True).stdout
+                (directory / "changes.patch").write_bytes(patch)
+                receipt["patch_sha256"] = hashlib.sha256(patch).hexdigest()
+                if not receipt["original_head_unchanged"] or not receipt["original_checkout_clean"]:
+                    raise RuntimeError("Original repository changed during the run")
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                finalization_error = exc
+                receipt["status"] = "failed"
+                receipt["finalization_error"] = redact(getattr(exc, "stderr", None) or str(exc))
             receipts = common / "greenpr-runs"
             receipts.mkdir(exist_ok=True)
             receipt_path = receipts / f"{run_id}.json"
@@ -72,3 +89,5 @@ def isolated_checkout():
             print(f"GREENPR_RESULT={receipt_path}")
             print(f"Review worktree retained: {checkout}")
             print("Original checkout was not used for install, tests, or remediation.")
+            if finalization_error and (active_error is None or isinstance(active_error, SystemExit) and active_error.code in (None, 0)):
+                raise RuntimeError("Could not finalize verified run evidence; inspect the retained receipt") from finalization_error

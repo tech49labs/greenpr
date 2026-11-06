@@ -15,6 +15,22 @@ python -m venv .venv
 python -m pip install -r requirements.txt</code></pre>
 <p>On Windows, you can call the virtual environment directly without activating it:</p>
 <pre><code>&amp; C:\tools\greenpr\.venv\Scripts\python.exe C:\tools\greenpr\remediate.py --help</code></pre>
+<h2>Save your project's checks once</h2><p>You can keep the project directory, required checks, and test prerequisites in a reviewed <code>.greenpr.toml</code> file at the repository root. For example:</p>
+<pre><code>version = 1
+project = "."
+gates = ["npm test", "npm run typecheck"]
+executables = ["node", "npm"]
+required_env = ["NODE_ENV"]
+setup = []
+cleanup = []
+timeout_seconds = 300
+services = []
+
+[environment]
+NODE_ENV = "test"</code></pre>
+<p>Every gate must pass; there is no weaker fallback. Put only non-secret test defaults in <code>environment</code>. Do not copy production environment files or credentials into the configuration. Required environment entries contain variable names, not their values. Optional services name local test endpoints such as <code>127.0.0.1:5432</code>.</p><p>Explicit setup commands run only in the separate review worktree before verification. They may initialize test fixtures or invoke your reviewed test container, and a failed setup stops the run. Review these commands like other repository code: isolation of files does not prevent commands from accessing the network or external services. Configure test services and containers to use disposable data, then include their actual checks in the required gates.</p>
+<p>Set <code>timeout_seconds</code> to a whole number from 1 to 7200 for your configured commands. Optional <code>cleanup</code> commands release only the disposable services owned by that run; GreenPR does not add generic cleanup commands. Use the supplied unique <code>GREENPR_RUN_ID</code> to name your test containers or Compose project. Do not share a production service or use global prune commands. Container gates must rebuild or synchronize the current candidate source and lockfile every time they run, so the post-update checks exercise the changed dependency.</p>
+<p>After saving the configuration, run <code>python /path/to/greenpr/remediate.py --doctor</code> from the repository root to check prerequisites without installing or changing files. Additional <code>--test-cmd</code> arguments add checks; they do not replace configured gates.</p>
 <h2>3. Scan your repository</h2><p>Change into the target repository, then run:</p>
 <pre><code>cd /path/to/your/repository
 python /path/to/greenpr/remediate.py --scan-only</code></pre>

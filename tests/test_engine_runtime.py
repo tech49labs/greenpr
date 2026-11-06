@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from engine.runtime import git, isolated_checkout, repository_lock
 from engine.npm import update, validate_target
@@ -61,6 +62,23 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(Path("source.txt").read_text(), "original")
         self.assertEqual(receipt["status"], "verified")
         self.assertEqual(len(receipt["patch_sha256"]), 64)
+
+    def test_patch_capture_failure_preserves_original_failure_receipt(self):
+        real_run = subprocess.run
+        def runner(command, **kwargs):
+            if command[:3] == ["git", "diff", "--binary"]:
+                raise subprocess.CalledProcessError(1, command, stderr=b"fixture diff failure")
+            return real_run(command, **kwargs)
+        with patch("engine.runtime.subprocess.run", side_effect=runner):
+            with self.assertRaisesRegex(RuntimeError, "original failure"):
+                with isolated_checkout() as receipt:
+                    self.worktrees.append(receipt["worktree"])
+                    raise RuntimeError("original failure")
+        result = json.loads(next(Path(".git/greenpr-runs").glob("*.json")).read_text())
+        self.assertEqual(result["error_summary"], "original failure")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("finalization_error", result)
+        self.assertNotIn("patch_sha256", result)
 
     def test_workspace_updates_all_declaring_manifests(self):
         Path("package.json").write_text(json.dumps({"private": True, "workspaces": ["packages/*"]}))
