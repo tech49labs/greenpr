@@ -32,14 +32,14 @@ class DiagnosticTests(unittest.TestCase):
         receipt = {}
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'SECRET_KEY': 'fixture-private-value'}):
             with diagnostic_session(receipt, directory):
-                result = record_command(['pytest', '--token', 'cli-token'], subprocess.CompletedProcess([], 1, 'assert 1 == 2', 'SECRET_KEY=fixture-private-value'), phase='baseline', duration_seconds=1.23456)
+                result = record_command(['pytest', '--token', 'cli-token'], subprocess.CompletedProcess([], 1, 'E   assert 1 == 2', 'SECRET_KEY=fixture-private-value'), phase='baseline', duration_seconds=1.23456)
             self.assertEqual(result['classification'], 'test_failure')
             self.assertEqual(result['elapsed_seconds'], 1.235)
             self.assertEqual(result['exit_code'], 1)
             raw = Path(result['log_path']).read_text()
             self.assertNotIn('fixture-private-value', raw)
             self.assertNotIn('cli-token', raw)
-            self.assertEqual(json.loads(raw)['stdout'], 'assert 1 == 2')
+            self.assertEqual(json.loads(raw)['stdout'], 'E   assert 1 == 2')
             self.assertNotIn('stdout', receipt['commands'][0])
             self.assertEqual(receipt['last_failure']['log_path'], result['log_path'])
         standalone = record_command('true', subprocess.CompletedProcess([], 0, '', ''), phase='final', duration_seconds=0)
@@ -87,6 +87,40 @@ class DiagnosticTests(unittest.TestCase):
             self.assertIn(b'output before timeout', result.stdout)
             self.assertTrue(receipt['commands'][0]['timed_out'])
             self.assertIn('output before timeout', Path(receipt['commands'][0]['log_path']).read_text())
+
+    def test_quoted_assert_in_container_error_is_not_test_failure(self):
+        output = ("request returned 500 Internal Server Error for API route http://docker-engine/v1.51/containers/json\n"
+                  "subprocess.CalledProcessError: Command ['docker', 'compose', 'run', 'python -c assert pins==[actual]'] returned non-zero exit status 125.")
+        self.assertEqual(classify_failure('', output, 1, 'baseline')[0], 'infrastructure_runtime')
+        quoted = "Command 'python -c assert pins==[actual]' returned non-zero exit status 1."
+        self.assertEqual(classify_failure('', quoted, 1)[0], 'command_failure')
+        self.assertEqual(classify_failure('', "Command 'echo AssertionError' failed", 1)[0], 'command_failure')
+
+    def test_resource_error_precedes_assertions_and_real_test_signals_still_classify(self):
+        self.assertEqual(classify_failure('E   assert 1 == 2', 'OSError: Cannot allocate memory', 1)[0], 'infrastructure_resource')
+        for text in ['E   assert 1 == 2', 'AssertionError: values differ', '=== 2 failed, 3 passed in 1.0s ===', 'FAILED (failures=1)']:
+            with self.subTest(output=text):
+                self.assertEqual(classify_failure(text, '', 1)[0], 'test_failure')
+        self.assertEqual(classify_failure('', 'container exited without output', 125)[0], 'command_failure')
+
+    def test_first_failure_survives_cleanup_failure(self):
+        receipt = {}
+        with tempfile.TemporaryDirectory() as directory:
+            with diagnostic_session(receipt, directory):
+                record_command('baseline', subprocess.CompletedProcess([], 125, '', 'Docker engine HTTP 500'), phase='baseline', duration_seconds=1)
+                record_command('cleanup', subprocess.CompletedProcess([], 1, '', 'cleanup failed'), phase='cleanup', duration_seconds=1)
+            self.assertEqual(receipt['first_failure']['phase'], 'baseline')
+            self.assertEqual(receipt['last_failure']['phase'], 'cleanup')
+            self.assertEqual(receipt['first_failure']['classification'], 'infrastructure_runtime')
+
+    def test_setup_and_cleanup_labels_record_correct_phases(self):
+        import remediate
+        receipt = {}
+        with tempfile.TemporaryDirectory() as directory:
+            with diagnostic_session(receipt, directory), patch.object(remediate.subprocess, 'Popen', side_effect=FileNotFoundError('fixture executable missing')):
+                remediate._run_with_heartbeat('fixture', 'Configured test setup 1')
+                remediate._run_with_heartbeat('fixture', 'Configured test cleanup 1')
+            self.assertEqual([item['phase'] for item in receipt['commands']], ['setup', 'cleanup'])
 
 
 if __name__ == '__main__':
