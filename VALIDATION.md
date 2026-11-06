@@ -21,6 +21,10 @@ Main advanced to `03fe4fea3b466e515bc67919d48939f26e5218e0` during implementatio
 - Retain bounded output draining and owned-process cleanup for the pipe-deadlock fix; do not restore destructive rollback or unchecked shell commands. Reports expose command identity, directory, exit code, and duration rather than dumping raw potentially secret-bearing logs.
 - Real npm workspace and pnpm workspace fixtures each upgraded minimist 1.2.5 → 1.2.6 in the owner manifest/shared lock. Real npm and pnpm transitive fixtures each upgraded minimist to 0.2.4 via root policy and refreshed locks without adding a direct dependency. All four ran baseline and post-update checks, rescanned successfully, retained verified local commits, and preserved caller files. No remote fixture PR or model call was involved.
 
+## Independent rescan-coverage finding
+
+Independent review identified a fail-open at `5e1e036`: a rescan containing only the upgraded target was accepted even when another previously inventoried manifest/package and its advisory disappeared. Four regression cases reproduced acceptance, covering lost separate manifests and lost packages within the same manifest, both vulnerable and non-vulnerable. The guard now requires inventory identity retention and refuses a vanished advisory on a still-present affected version. Tests also cover delivery prevention, retained caller state, leftover vulnerable target versions, and valid upgrades of other dependencies. Legitimate removals/renames/withdrawals require manual review; no independent removal proof is yet implemented.
+
 ## Verified cause of the reported Gemini errors
 
 The inherited session's `GEMINI_API_KEY` held an OAuth-style token. Google rejected API-key authentication with HTTP 400 / `API_KEY_INVALID`; using that token as a Bearer credential returned HTTP 401 / `ACCESS_TOKEN_TYPE_UNSUPPORTED`. The actual Windows user's saved `GEMINI_API_KEY` was different and successfully listed models and generated both synthetic edits. No key was printed, created, or changed.

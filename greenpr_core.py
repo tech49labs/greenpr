@@ -303,6 +303,19 @@ def finding_key(item):
 
 
 def verify_rescan(before: Scan, after: Scan, finding):
+    before_keys = {finding_key(p) for p in before.packages}
+    after_keys = {finding_key(p) for p in after.packages}
+    if before_keys - after_keys:
+        # An absent package could be a legitimate graph removal OR missing scanner
+        # coverage. Without independent removal evidence it cannot count as fixed.
+        raise GreenPRError("Rescan lost manifest/package coverage; removed dependencies require manual review")
+    after_versions = {(finding_key(p), p["current_version"]) for p in after.packages}
+    after_assertions = {(finding_key(f), f["current_version"], advisory)
+                        for f in after.findings for advisory in f["advisory_ids"]}
+    for prior in before.findings:
+        version_key = (finding_key(prior), prior["current_version"])
+        if version_key in after_versions and any((*version_key, a) not in after_assertions for a in prior["advisory_ids"]):
+            raise GreenPRError("Rescan omitted an advisory for an unchanged package version; manual review required")
     key = finding_key(finding)
     observed = [p for p in after.packages if finding_key(p) == key]
     if not observed or not any(p["current_version"].removeprefix("v") == finding["target_version"].removeprefix("v") for p in observed):

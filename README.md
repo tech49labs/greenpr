@@ -56,6 +56,8 @@ Every run prints a JSON report path outside the target repository. `--report` ac
 
 `--scan-only` is retained as an alias for `--dry-run`. Workspace ownership follows declared npm/Yarn/Bun workspaces or pnpm package patterns (including exclusions), not an unrestricted search through unrelated projects. New declarations pin the exact validated target. Complex workspace glob forms and existing transitive override policies are refused rather than overwritten. Installation refreshes the actual dependencies used by checks, not only the lockfile.
 
+Rescans must retain every previously inventoried manifest/ecosystem/package identity, including packages without advisories. An advisory cannot silently disappear while the affected version remains inventoried. A legitimate dependency removal, manifest rename, or advisory withdrawal therefore requires manual review until separate evidence can distinguish it from lost scanner coverage.
+
 ## GitHub Actions
 
 The action supports Linux x64 and installs a pinned, SHA-256-verified OSV scanner. Set up your project's runtime/package manager first. Use manual/scheduled triggers on trusted branches, not untrusted pull-request code.
