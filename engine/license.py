@@ -23,7 +23,7 @@ def validate_commercial_license():
     token = os.environ.get("GREENPR_LICENSE_TOKEN", "")
     parsed = urlsplit(base)
     if not token or not base or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("Set GREENPR_API_URL and GREENPR_LICENSE_TOKEN for commercial execution")
+        raise ValueError("For manual licensing, set GREENPR_LICENSE_FILE to your signed GreenPR license. The optional legacy service requires both GREENPR_API_URL and GREENPR_LICENSE_TOKEN.")
     if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost", "::1")):
         raise ValueError("License service must use HTTPS")
     repository = repository_identity()

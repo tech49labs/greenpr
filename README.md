@@ -107,7 +107,9 @@ enabled, source content and error traces can leave your machine. Use an
 approved provider and inspect the resulting diff. Test files, manifests,
 untracked files, and paths outside the repository are excluded from repair.
 
-Provider SDKs and credentials are required for the provider you select.
+See [BYOK setup and supported adapters](docs/BYOK.md) for explicit provider,
+credential and model configuration. The existing dependencies provide the
+implemented transports; no provider is mandatory for the core workflow.
 Model routing and third-party models need separate live acceptance; the local
 suite does not call paid providers. Never commit API keys. There is no claim
 of air-gapped model support or a model accuracy guarantee.

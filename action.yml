@@ -12,7 +12,7 @@ inputs:
     required: false
     default: ''
   api_key:
-    description: 'GreenPR API Key (supports Gemini, Anthropic Claude, OpenAI, DeepSeek, Groq, or custom endpoints)'
+    description: 'BYOK credential for the explicitly selected provider; never inferred from key prefixes'
     required: false
     default: ''
   gemini_api_key:
@@ -27,8 +27,24 @@ inputs:
     description: 'Optional OpenAI API key override'
     required: false
     default: ''
+  provider:
+    description: 'gemini, openai, anthropic, deepseek, groq, or openai-compatible'
+    required: false
+    default: ''
+  base_url:
+    description: 'Explicit endpoint for openai-compatible only'
+    required: false
+    default: ''
+  deepseek_api_key:
+    description: 'Optional DeepSeek key'
+    required: false
+    default: ''
+  groq_api_key:
+    description: 'Optional Groq key'
+    required: false
+    default: ''
   model:
-    description: 'Optional explicit model name override'
+    description: 'Required native model ID when model repair is enabled'
     required: false
     default: ''
   github_token:
@@ -57,6 +73,10 @@ runs:
         GIT_COMMITTER_NAME: GreenPR
         GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        GREENPR_PROVIDER: ${{ inputs.provider }}
+        GREENPR_BASE_URL: ${{ inputs.base_url }}
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek_api_key }}
+        GROQ_API_KEY: ${{ inputs.groq_api_key }}
         GREENPR_API_KEY: ${{ inputs.api_key }}
         GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}

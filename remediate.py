@@ -328,35 +328,11 @@ def resolve_subproject_test_cmd(working_dir: str, custom_test_cmd: Optional[str]
 # ==============================================================================
 
 def resolve_engine_tiers() -> Dict[str, Optional[str]]:
-    """Resolves primary and secondary model routing based on available environment credentials."""
-    if os.environ.get("GREENPR_ENABLE_MODEL_REPAIR") != "1":
+    from engine.providers import configuration
+    config = configuration()
+    if config is None:
         return {"tier1": None, "tier2": None, "provider": "disabled"}
-    raw_key = os.environ.get("GREENPR_API_KEY")
-    explicit_model = os.environ.get("GREENPR_MODEL") or os.environ.get("MODEL")
-
-    if raw_key:
-        if raw_key.startswith("sk-ant-") and "ANTHROPIC_API_KEY" not in os.environ:
-            os.environ["ANTHROPIC_API_KEY"] = raw_key
-        elif (raw_key.startswith("AQ.") or raw_key.startswith("AIza")) and "GEMINI_API_KEY" not in os.environ:
-            os.environ["GEMINI_API_KEY"] = raw_key
-        elif raw_key.startswith("sk-") and "OPENAI_API_KEY" not in os.environ:
-            os.environ["OPENAI_API_KEY"] = raw_key
-
-    if explicit_model:
-        return {"tier1": explicit_model, "tier2": explicit_model, "provider": "custom"}
-
-    if "GEMINI_API_KEY" in os.environ:
-        return {"tier1": "gemini-flash-latest", "tier2": "gemini-pro-latest", "provider": "gemini"}
-    elif "ANTHROPIC_API_KEY" in os.environ:
-        return {"tier1": "claude-3-5-haiku-latest", "tier2": "claude-3-5-sonnet-latest", "provider": "anthropic"}
-    elif "OPENAI_API_KEY" in os.environ:
-        return {"tier1": "gpt-4o-mini", "tier2": "gpt-4o", "provider": "openai"}
-    elif "DEEPSEEK_API_KEY" in os.environ:
-        return {"tier1": "deepseek-chat", "tier2": "deepseek-reasoner", "provider": "deepseek"}
-    elif "GROQ_API_KEY" in os.environ:
-        return {"tier1": "llama-3.3-70b-versatile", "tier2": "llama-3.3-70b-versatile", "provider": "groq"}
-
-    return {"tier1": None, "tier2": None, "provider": "default"}
+    return {"tier1": config.model, "tier2": config.repair_model, "provider": config.provider}
 
 
 # ==============================================================================
@@ -486,53 +462,21 @@ def run_vulnerability_radar(active_ecosystems: Optional[List[str]] = None) -> Li
 # ==============================================================================
 
 def extract_migration_plan(package_name: str, current_ver: str, target_ver: str, changelog_text: str) -> MigrationPlan:
-    """Analyzes version upgrade requirements into structured transformation schema."""
-    if os.environ.get("GREENPR_ENABLE_MODEL_REPAIR") != "1":
-        return MigrationPlan(package_name=package_name, target_version=target_ver, general_summary="Dependency update; model repair disabled.")
-    prompt = (
-        f"Analyze the following upgrade information for {package_name} from {current_ver} to {target_ver}. "
-        f"Extract all breaking API changes into the schema. If no breaking changes exist, leave breaking_changes empty.\n\n"
-        f"Changelog:\n{changelog_text}"
-    )
-
-    if "GEMINI_API_KEY" in os.environ:
+    tiers = resolve_engine_tiers()
+    fallback = MigrationPlan(package_name=package_name, target_version=target_ver,
+                             general_summary="Dependency update; no model-generated migration plan.")
+    if not tiers["tier1"]:
+        return fallback
+    prompt = (f"Analyze {package_name} from {current_ver} to {target_ver}. "
+              "Return only JSON matching this schema, with no invented breaking changes: "
+              + json.dumps(MigrationPlan.model_json_schema()) + "\nChangelog:\n" + changelog_text)
+    response = _call_native_llm(prompt, tiers["tier1"], tiers["provider"])
+    if response:
         try:
-            from google import genai
-            client = genai.Client()
-            response = client.models.generate_content(
-                model="gemini-flash-latest",
-                contents=prompt,
-                config={
-                    "response_mime_type": "application/json",
-                    "response_schema": MigrationPlan,
-                }
-            )
-            return MigrationPlan.model_validate_json(response.text)
-        except Exception:
-            pass
-
-    if "OPENAI_API_KEY" in os.environ or "DEEPSEEK_API_KEY" in os.environ:
-        try:
-            from openai import OpenAI
-            client = OpenAI()
-            response = client.beta.chat.completions.parse(
-                model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-                messages=[
-                    {"role": "system", "content": "You are an automated code migration compiler."},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format=MigrationPlan
-            )
-            return response.choices[0].message.parsed
-        except Exception:
-            pass
-
-    return MigrationPlan(
-        package_name=package_name,
-        target_version=target_ver,
-        breaking_changes=[],
-        general_summary=f"Automated security remediation for {package_name} ({current_ver} -> {target_ver})."
-    )
+            return MigrationPlan.model_validate_json(_strip_markdown(response))
+        except ValueError:
+            print("[model] Invalid migration-plan response; using deterministic verification.")
+    return fallback
 
 
 # ==============================================================================
@@ -550,51 +494,13 @@ def _strip_markdown(code_text: str) -> str:
     return text
 
 def _call_native_llm(prompt: str, model_name: str, provider: str) -> Optional[str]:
-    """Proprietary native inference call. Never invokes external CLIs or browser hooks."""
-    if provider == "gemini" or "GEMINI_API_KEY" in os.environ:
-        try:
-            from google import genai
-            client = genai.Client()
-            clean_model = model_name.replace("gemini/", "") if model_name else "gemini-flash-latest"
-            resp = client.models.generate_content(
-                model=clean_model,
-                contents=prompt
-            )
-            return resp.text.strip()
-        except Exception:
-            pass
+    from engine.providers import generate, ProviderError
+    try:
+        return generate(prompt, model_name, provider)
+    except ProviderError as exc:
+        print(f"[model] {exc}")
+        return None
 
-    if provider == "openai" or "OPENAI_API_KEY" in os.environ or "DEEPSEEK_API_KEY" in os.environ:
-        try:
-            from openai import OpenAI
-            client = OpenAI()
-            clean_model = model_name.replace("openai/", "") if model_name else "gpt-4o-mini"
-            resp = client.chat.completions.create(
-                model=clean_model,
-                messages=[
-                    {"role": "system", "content": "You are the GreenPR dependency remediation engine."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            return resp.choices[0].message.content.strip()
-        except Exception:
-            pass
-
-    if provider == "anthropic" or "ANTHROPIC_API_KEY" in os.environ:
-        try:
-            import anthropic
-            client = anthropic.Anthropic()
-            clean_model = model_name.replace("anthropic/", "") if model_name else "claude-3-5-haiku-latest"
-            resp = client.messages.create(
-                model=clean_model,
-                max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return resp.content[0].text.strip()
-        except Exception:
-            pass
-
-    return None
 
 def safe_repair_path(filepath: str) -> bool:
     from pathlib import Path
@@ -955,7 +861,9 @@ def _run_current_checkout(config=None):
     args = parser.parse_args()
     if config:
         args.test_cmd = list(config.gates) + (args.test_cmd or [])
-    os.environ["GREENPR_ENABLE_MODEL_REPAIR"] = "1" if args.enable_model_repair else "0"
+    os.environ["GREENPR_ENABLE_MODEL_REPAIR"] = "1" if args.enable_model_repair and not args.dry_run else "0"
+    if args.enable_model_repair and not args.dry_run:
+        resolve_engine_tiers()  # Validate routing before baseline work or source disclosure.
 
     if bool(args.package) != bool(args.target_version):
         parser.error("--package and --target-version must be supplied together")
@@ -1174,7 +1082,10 @@ def main():
             if candidate_config:
                 import hashlib
                 committed_config_bytes = (Path(receipt["worktree"]) / ".greenpr.toml").read_bytes()
-                if committed_config_bytes != (original / ".greenpr.toml").read_bytes():
+                # Git may convert LF to CRLF on checkout. Compare the same TOML
+                # content while still rejecting edits made during candidate creation.
+                original_config_bytes = (original / ".greenpr.toml").read_bytes()
+                if committed_config_bytes.replace(b'\r\n', b'\n') != original_config_bytes.replace(b'\r\n', b'\n'):
                     raise RuntimeError("Onboarding config changed during candidate creation")
                 receipt["config_sha256"] = hashlib.sha256(committed_config_bytes).hexdigest()
             project = (Path.cwd() / selected.project).resolve()
