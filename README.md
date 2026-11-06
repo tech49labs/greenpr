@@ -68,6 +68,7 @@ and distinguishes missing configuration, missing dependencies and test failures.
 | `--test-cmd "command"` | Use this exact trusted shell command for baseline and final verification. |
 | `--package NAME --target-version VERSION` | Request an explicit update; provide both options together. |
 | `--skip-pr` | Retain a separate review worktree, patch, and JSON receipt without publishing. |
+| `--base-branch BRANCH` | Target an explicit existing GitHub branch for the pull request; omitted uses the repository default. Syntax is validated before setup; the choice is recorded in the receipt. |
 | `--skip-hosted-ci` | Explicitly add `[skip ci]` to the generated commit after local verification; required GitHub checks remain pending and merge protections remain unchanged. |
 | `--limit 1` | One package per invocation. Review it before running again. |
 | `--ecosystem npm` | Select an ecosystem; use `--scan-only --ecosystem all` for broad discovery. |
