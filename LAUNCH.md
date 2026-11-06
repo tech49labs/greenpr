@@ -47,7 +47,7 @@ These results establish local/fixture acceptance, not live customer delivery.
 | Manual license issuer | 9 passed; actual CLI with ephemeral signing key |
 | OSV resolved dependency scan | Zero reported vulnerabilities; 33 CLI package entries |
 | Static site build | Published and byte-matched against the production responses |
-| PR delivery | Mocked regression present; live public PR creation not performed |
+| PR delivery | Live private-repository dependency PR verified and published; see follow-up evidence below |
 | Live payment or checkout | Not performed; automated checkout outside launch scope |
 | Release PR merge, public deployment and smoke | Complete; see publication verification above |
 
@@ -89,7 +89,16 @@ substitute for local acceptance.
   regressions passed, including a real import and clean-checkout assertion.
 - A private repository baseline passed 14,865 selected tests, 97.9637% aggregate
   branch-inclusive coverage, and 14 required invoice-conformance tests. Dependency
-  update and PR delivery acceptance remain pending.
+  update and PR delivery acceptance subsequently completed; see the final workflow record below.
+- Python target inspection now selects the declared project environment's
+  interpreter by absolute path, avoiding Windows executable-search precedence
+  choosing the GreenPR interpreter. Missing declared environments fail closed;
+  native inspection errors retain a redacted cause. All 98 Windows and Linux
+  regressions passed, including a real distribution installed only in a fresh
+  virtual environment. Failure summaries no longer claim a test failure,
+  rollback, or published PR without corresponding evidence.
+- The fresh post-update application run also completed all 14,865 selected tests
+  and 14 invoice-conformance tests. Publication remains separately verified.
 - The current site artifact is https://1506bb03.greenpr-cw0.pages.dev/.
   Production was rechecked after the diagnostics release: all seven exact
   assets and five absent-route checks passed. The diagnostics change did not
@@ -100,18 +109,34 @@ substitute for local acceptance.
   covers the scanned dependency versions, not a general security certification.
 - These follow-ups used local validation and CI-skip commits; they did not add
   hosted application services or dispatch hosted test runs. Live dependency
-  remediation acceptance remains pending until its retained receipt and PR
-  establish the complete baseline, update, and post-update checks.
+  remediation acceptance is established by the final workflow record below.
+
+### Completed private-repository workflow
+
+- The scan identified an oauthlib update from 4.0.0 to 4.0.1. Baseline and fresh
+  post-update gates each completed the same 14,865 selected test IDs in the same
+  order, with 97.96372852222898% aggregate branch-inclusive coverage and all 14
+  required invoice-conformance tests passing.
+- Final inspection verified the installed project version and persisted lock at
+  4.0.1; a fresh advisory scan reported no target vulnerabilities. The verified
+  patch was committed, pushed, and published as an open private review PR.
+- Retained evidence explicitly links the complete passing gates, operator
+  recovery for host bytecode/interpreter-selection defects, and final publication
+  checks. Earlier failed receipts were preserved. A documentation-only follow-up
+  leaves the tested application and verification configuration trees unchanged.
+- Local run services and disposable database volumes were cleaned up. No hosted
+  CI run was dispatched for the published branch and no hosting service was added.
+  This establishes the exercised repository workflow, not general security
+  certification or live commercial payment acceptance.
 
 Before the first sale, use [billing/manual-sales.md](billing/manual-sales.md) to
 verify the authorized invoice process and agree a private fulfillment channel.
 Do not collect sensitive details or deliver signed licenses on public issues.
 Payment-process verification is not a gate for publishing a request website.
 
-Before unattended PR rollout, perform an authorized live GitHub delivery check:
-scan, update, verification, branch push, PR creation, and changed-file review.
-Mocked delivery regressions do not establish live delivery. Do not create a new
-public repository solely to launch the static website.
+The authorized live GitHub delivery check completed: scan, update, verification,
+branch push, PR creation, and changed-file review. Further customer repositories
+still require their own passing verification configuration and PR review.
 
 `billing/catalog.json` is a manual pricing reference, not proof of provisioned
 Stripe resources. The commercial self-service backend is maintained privately
@@ -126,6 +151,6 @@ release.
 - Pages deployment identifier and URL: `4c61da16`, https://4c61da16.greenpr-cw0.pages.dev/.
 - Public smoke-test result: all seven assets and five absent-route checks passed.
 - Manual invoice/private delivery process (before first sale): operator follow-up, not yet exercised with a real customer.
-- Live engine-generated PR acceptance (before unattended rollout): not performed; release PR publication is separate evidence.
+- Live dependency PR acceptance: complete on an authorized private repository, with retained baseline/update/publication evidence and reviewed changed files.
 - Rollback: redeploy the last verified static artifact; suspend new paid
   fulfillment if the operator cannot safely complete it.

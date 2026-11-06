@@ -2,6 +2,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 from engine.adapters import update
 from engine.adapters import validate_target
@@ -29,6 +31,32 @@ class AdapterTests(unittest.TestCase):
         self.write("requirements.txt", 'requests[socks]==2.31.0; python_version >= "3.11" # required proxy support\n')
         update({"package": "requests", "target_version": "2.32.4", "ecosystem": "pypi"})
         self.assertEqual(Path("requirements.txt").read_text(), 'requests[socks]==2.32.4; python_version >= "3.11" # required proxy support\n')
+
+    def test_python_inspection_uses_project_environment_with_real_distribution(self):
+        environment = Path(self.temp.name) / 'isolated-python'
+        subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(environment)], check=True)
+        python = environment / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+        purelib = Path(subprocess.check_output([str(python), '-c', "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True).strip())
+        metadata = purelib / 'greenpr_inspection_fixture-3.4.5.dist-info'
+        metadata.mkdir()
+        (metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: greenpr-inspection-fixture\nVersion: 3.4.5\n')
+        with patch.dict(os.environ, {'UV_PROJECT_ENVIRONMENT': str(environment), 'VIRTUAL_ENV': 'wrong-environment'}):
+            validate_target({'package': 'greenpr-inspection-fixture', 'target_version': '3.4.5', 'ecosystem': 'pypi'})
+            with self.assertRaises(ValueError):
+                validate_target({'package': 'greenpr-inspection-fixture', 'target_version': '3.4.6', 'ecosystem': 'pypi'})
+
+    def test_python_missing_declared_environment_does_not_fall_back_to_global(self):
+        with patch.dict(os.environ, {'UV_PROJECT_ENVIRONMENT': str(Path(self.temp.name) / 'missing')}):
+            with self.assertRaisesRegex(ValueError, 'interpreter is missing'):
+                validate_target({'package': 'packaging', 'target_version': '26.3', 'ecosystem': 'pypi'})
+
+    def test_native_inspection_error_keeps_redacted_cause(self):
+        from engine.adapters import checked
+        with self.assertRaises(ValueError) as error:
+            checked([sys.executable, '-c', "import sys; sys.stderr.write('inspection failed api_key=fixture-secret'); sys.exit(1)"])
+        self.assertIn('inspection failed', str(error.exception))
+        self.assertIn('[REDACTED]', str(error.exception))
+        self.assertNotIn('fixture-secret', str(error.exception))
 
     def uv_fixture(self, constraints='["anyio>=4.0"]'):
         source = '[project]\nname="fixture"\nversion="1.0"\ndependencies=["django-oauth-toolkit[extra]>=3"]\n[dependency-groups]\ntest=["pytest>=8"]\n[tool.uv]\nconstraint-dependencies='+constraints+'\n'
