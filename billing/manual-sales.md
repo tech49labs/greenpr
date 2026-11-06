@@ -3,6 +3,10 @@
 The launch uses public GitHub requests, manually confirmed payment, and signed offline
 licenses. The website does not collect payment or activate subscriptions.
 `catalog.json` records reference prices only. No hosted backend is required.
+Use the [first-sale checklist](first-sale-checklist.md) for contact privacy,
+payment confirmation, issuance, activation and renewal handoffs. Copy the empty
+[customer register](customer-register.template.csv) to a private location before
+recording any real customer information.
 
 ## Request and payment
 

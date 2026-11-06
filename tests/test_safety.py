@@ -162,6 +162,13 @@ class RepositoryCase(unittest.TestCase):
             self.assertEqual(error.exception.code, 0)
             gate.assert_not_called()
 
+    def test_scan_only_with_repair_flag_still_never_validates_or_calls_provider(self):
+        with patch.object(sys, 'argv', ['remediate.py', '--scan-only', '--enable-model-repair']), patch.object(app, 'run_vulnerability_radar', return_value=[]), patch.object(app, 'resolve_engine_tiers') as routing:
+            with self.assertRaises(SystemExit) as error:
+                app.main()
+            self.assertEqual(error.exception.code, 0)
+            routing.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
