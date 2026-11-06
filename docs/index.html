@@ -135,21 +135,21 @@
 <div class="eyebrow">Local quickstart</div>
 <h2>Start with a scan.</h2>
 <p>Install GreenPR separately, then run it from the repository you want to inspect.</p>
-<p class="small">Follow the setup guide to install the required tools. GreenPR verifies updates in a separate worktree; use a dedicated runner for untrusted project scripts.</p>
+<p class="small">Use the <a href="https://github.com/tech49labs/greenpr/blob/main/docs/FIRST-RUN.md">Windows PowerShell or Linux first-run commands</a> to install the required tools. No GreenPR account, payment details or model key is needed for Community use. GreenPR verifies updates in a separate worktree; use a dedicated runner for untrusted project scripts.</p>
 <a href="guide.html">Read the setup guide ↗</a>
 </div>
 <pre>
-<code># From the GreenPR tool directory
-python -m venv .venv
-# Activate the environment, then:
-python -m pip install -r requirements.txt
+<code># Linux example; use the linked guide for Windows
+# From the GreenPR tool directory
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 
 # Change into the repository to inspect
 cd /path/to/your/repository
-python /path/to/greenpr/remediate.py --scan-only
+/path/to/greenpr/.venv/bin/python /path/to/greenpr/remediate.py --scan-only
 
 # Verify one update in a review worktree
-python /path/to/greenpr/remediate.py --test-cmd "npm test" --skip-pr</code>
+/path/to/greenpr/.venv/bin/python /path/to/greenpr/remediate.py --test-cmd "npm test" --skip-pr</code>
 </pre>
 </section>
 <section class="section">

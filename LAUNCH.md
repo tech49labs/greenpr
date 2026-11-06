@@ -8,6 +8,16 @@ There is no checkout, GreenPR customer account or hosted application backend.
 
 ## Latest launch verification — November 6, 2026
 
+- Free customer readiness was rechecked from fresh public clones, downloaded
+  checksum-verified scanners and new virtual environments: Windows x64 Python
+  3.11.9 and Linux x64 Python 3.14.10. Both passed 112 regressions, four real npm
+  scenarios, a real Python update and a free scan of 33 constrained CLI packages.
+  Linux also passed fresh Go, Rust, Maven, Gradle and .NET update workflows.
+  No model key, commercial license, payment details or GreenPR account was used.
+  See [fresh-install evidence](tests/FREE_LAUNCH_ACCEPTANCE.md) and the
+  [Windows/Linux first-run guide](docs/FIRST-RUN.md). Project prerequisites and
+  passing verification gates remain required; other platform combinations are
+  not represented as tested.
 - Runner release [PR #10](https://github.com/tech49labs/greenpr/pull/10) merged as
   `55bf92e6a2e425c4cace19a2f9334f5c51432fe3`. Its content passed 112 regression
   tests on both Windows and Linux. Core dependency updates require no model key;
