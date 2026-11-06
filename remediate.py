@@ -1184,6 +1184,8 @@ def main():
             os.environ["GREENPR_RUN_ID"] = receipt["run_id"]
             if config:
                 os.environ.update(config.environment)
+            # Imports in host verification hooks must not dirty the review checkout.
+            os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
             try:
                 command = prepare_baseline(Path(receipt["worktree"]).parent, selected.ecosystem)
                 if command:
