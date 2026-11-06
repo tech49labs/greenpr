@@ -37,3 +37,4 @@ jobs:
         with:
           api_key: ${{ secrets.GREENPR_API_KEY || secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          test_cmd: python -m unittest discover -s tests -q
