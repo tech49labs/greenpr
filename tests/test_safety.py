@@ -169,6 +169,40 @@ class RepositoryCase(unittest.TestCase):
             self.assertEqual(error.exception.code, 0)
             routing.assert_not_called()
 
+    def test_git_crlf_conversion_preserves_reviewed_onboarding(self):
+        Path('.gitattributes').write_bytes(b'.greenpr.toml text eol=crlf\n')
+        Path('.greenpr.toml').write_bytes(b'version=1\nproject="."\ngates=["required-check"]\n')
+        self.git('add', '.gitattributes', '.greenpr.toml')
+        self.git('commit', '-qm', 'reviewed onboarding')
+        self.assertEqual(self.git('status', '--porcelain').stdout, '')
+        def check(config):
+            self.assertEqual(config.gates, ('required-check',))
+            self.assertIn(b'\r\n', Path('.greenpr.toml').read_bytes())
+            return {}
+        with patch.object(sys, 'argv', ['remediate.py', '--skip-pr']), patch('engine.adapters.prepare_baseline', return_value=None), patch.object(app, '_run_current_checkout', side_effect=check) as runner:
+            app.main()
+            runner.assert_called_once()
+        self.assertEqual(self.git('status', '--porcelain').stdout, '')
+
+    def test_config_content_change_during_candidate_creation_is_rejected(self):
+        from engine.onboarding import load_config
+        Path('.greenpr.toml').write_bytes(b'version=1\nproject="."\ngates=["required-check"]\n')
+        self.git('add', '.greenpr.toml')
+        self.git('commit', '-qm', 'reviewed onboarding')
+        original = Path.cwd()
+        def read_and_change(root):
+            config = load_config(root)
+            if Path(root) != original:
+                with (original / '.greenpr.toml').open('ab') as file:
+                    file.write(b'# concurrent edit\n')
+            return config
+        with patch.object(sys, 'argv', ['remediate.py', '--skip-pr']), patch('engine.onboarding.load_config', side_effect=read_and_change), patch('engine.adapters.prepare_baseline') as install, patch.object(app, '_run_current_checkout') as runner, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                app.main()
+            self.assertEqual(error.exception.code, 2)
+            install.assert_not_called()
+            runner.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1082,7 +1082,10 @@ def main():
             if candidate_config:
                 import hashlib
                 committed_config_bytes = (Path(receipt["worktree"]) / ".greenpr.toml").read_bytes()
-                if committed_config_bytes != (original / ".greenpr.toml").read_bytes():
+                # Git may convert LF to CRLF on checkout. Compare the same TOML
+                # content while still rejecting edits made during candidate creation.
+                original_config_bytes = (original / ".greenpr.toml").read_bytes()
+                if committed_config_bytes.replace(b'\r\n', b'\n') != original_config_bytes.replace(b'\r\n', b'\n'):
                     raise RuntimeError("Onboarding config changed during candidate creation")
                 receipt["config_sha256"] = hashlib.sha256(committed_config_bytes).hexdigest()
             project = (Path.cwd() / selected.project).resolve()
