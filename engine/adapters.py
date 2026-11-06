@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -17,7 +18,9 @@ def checked(command, cwd="."):
     result = subprocess.run(command, cwd=cwd, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=180)
     if result.returncode:
-        raise ValueError(f"Native dependency inspection failed: {command[0]}")
+        from engine.diagnostics import redact
+        detail = redact(result.stderr or result.stdout).strip()[:2000]
+        raise ValueError(f"Native dependency inspection failed: {command[0]}: {detail}")
     return result.stdout
 
 
@@ -283,7 +286,15 @@ def validate_target(vuln):
     root = project_directory(vuln)
     ecosystem = vuln.get("ecosystem", "").lower()
     if ecosystem in ("pypi", "python"):
-        output = checked(["python", "-c", "import importlib.metadata,sys; print(importlib.metadata.version(sys.argv[1]))", package], root)
+        environment = os.environ.get("UV_PROJECT_ENVIRONMENT") or os.environ.get("VIRTUAL_ENV")
+        if environment:
+            interpreter = Path(environment) / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            if not interpreter.is_file():
+                raise ValueError("Project Python interpreter is missing")
+            python = str(interpreter.absolute())
+        else:
+            python = shutil.which("python") or sys.executable
+        output = checked([python, "-c", "import importlib.metadata,sys; print(importlib.metadata.version(sys.argv[1]))", package], root)
         if output.strip() != target:
             raise ValueError("Installed Python version differs from target")
         if (root / "requirements.txt").exists() and not re.search(r"(?mi)^" + re.escape(package) + r"(?:\[[^\]\n]+\])?==" + re.escape(target) + r"(?:\s|;|#|$)", (root / "requirements.txt").read_text()):

@@ -793,7 +793,7 @@ def execute_remediation(profile: Dict, vuln: Dict, plan: MigrationPlan, verified
 
     # Optional model-assisted source repair.
     error_output = (initial_test.stdout or b'').decode('utf-8', errors='replace') + '\n' + (initial_test.stderr or b'').decode('utf-8', errors='replace')
-    print(f"        • Healing: interface discrepancies detected, repairing...")
+    print("        • Verification failed; inspecting optional source-repair candidates...")
 
     target_files = _extract_failing_files(error_output)
     if not target_files:
@@ -862,9 +862,9 @@ def _render_summary_table(results: List[Dict], total_elapsed: float, skip_pr: bo
     print("Remediation Summary:")
     print(f"  ✔ {success_count} package(s) passed the configured verification command")
     if failed_count > 0:
-        print(f"  ✖ {failed_count} package(s) rolled back due to test failure")
+        print(f"  ✖ {failed_count} package(s) did not complete verification or PR delivery; inspect retained diagnostics")
     print(f"  ⏱ Total duration: {_format_duration(total_elapsed)}")
-    mode_str = "Isolated worktree retained for review (--skip-pr)" if skip_pr else "Pull Requests published to GitHub"
+    mode_str = "Isolated worktree retained for review (--skip-pr)" if skip_pr else "PR publication enabled"
     print(f"  Mode: {mode_str}")
     print("-" * 64 + "\n")
 

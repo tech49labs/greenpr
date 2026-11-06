@@ -90,6 +90,15 @@ substitute for local acceptance.
 - A private repository baseline passed 14,865 selected tests, 97.9637% aggregate
   branch-inclusive coverage, and 14 required invoice-conformance tests. Dependency
   update and PR delivery acceptance remain pending.
+- Python target inspection now selects the declared project environment's
+  interpreter by absolute path, avoiding Windows executable-search precedence
+  choosing the GreenPR interpreter. Missing declared environments fail closed;
+  native inspection errors retain a redacted cause. All 98 Windows and Linux
+  regressions passed, including a real distribution installed only in a fresh
+  virtual environment. Failure summaries no longer claim a test failure,
+  rollback, or published PR without corresponding evidence.
+- The fresh post-update application run also completed all 14,865 selected tests
+  and 14 invoice-conformance tests. Publication remains separately verified.
 - The current site artifact is https://1506bb03.greenpr-cw0.pages.dev/.
   Production was rechecked after the diagnostics release: all seven exact
   assets and five absent-route checks passed. The diagnostics change did not
