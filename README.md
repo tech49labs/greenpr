@@ -17,7 +17,15 @@ The public website does not require a billing server or customer account.
 
 ## Run locally
 
-Install Python 3.11+, Git, your project's package manager, and OSV-Scanner v2:
+Community scanning and verified local updates require no GreenPR account,
+payment details, commercial license, or model API key. Community covers public
+open-source projects and local personal evaluation under the included license.
+
+Use the [copy-and-paste first-run guide](docs/FIRST-RUN.md) for Windows PowerShell
+and Linux, including a pinned scanner installation, quoted paths and the exact
+commands to run from your project folder.
+
+Install Python 3.11+, Git, your project's package manager, and OSV-Scanner v2.7.0:
 [OSV-Scanner](https://google.github.io/osv-scanner/installation/).
 Publishing pull requests additionally requires the authenticated GitHub CLI.
 Use a disposable checkout: install scripts and verification commands execute
@@ -28,19 +36,18 @@ Install the tool separately from the target repository:
 ```sh
 git clone https://github.com/tech49labs/greenpr.git
 cd greenpr
-python -m venv .venv
-# Activate .venv using your shell's activation script.
-python -m pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 
 cd /path/to/target-repository
-python /path/to/greenpr/remediate.py --scan-only
-python /path/to/greenpr/remediate.py --test-cmd "npm test" --skip-pr
+/path/to/greenpr/.venv/bin/python /path/to/greenpr/remediate.py --scan-only
+/path/to/greenpr/.venv/bin/python /path/to/greenpr/remediate.py --test-cmd "npm test" --skip-pr
 ```
 
 Use absolute paths on Windows, for example:
 
 ```powershell
-& C:\tools\greenpr\.venv\Scripts\python.exe C:\tools\greenpr\remediate.py --scan-only
+& 'C:\tools\greenpr\.venv\Scripts\python.exe' 'C:\tools\greenpr\remediate.py' --scan-only
 ```
 
 Choose a command that includes all required checks. GreenPR does not replace a
