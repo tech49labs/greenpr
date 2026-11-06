@@ -72,6 +72,37 @@ substitute for local acceptance.
 - Real repository acceptance remains separate from these regression results;
   a passing baseline and post-update run must precede any verified dependency PR.
 
+### PR targeting and runtime diagnostics follow-up
+
+- [PR #6](https://github.com/tech49labs/greenpr/pull/6) added explicit
+  `--base-branch` selection and merged as
+  `ae4bc304a64b3cfd75e688ca930f40120061cca8`.
+- [PR #7](https://github.com/tech49labs/greenpr/pull/7) distinguishes runtime
+  failures from test assertions, preserves the first failure alongside the
+  latest failure, and identifies setup and cleanup failures separately. It
+  merged as `f64486f762b6a612eab3dbdf4983d9162f88cc56`.
+- The latest diagnostics candidate passed 94 Windows regression tests. The
+  earlier 87-test Linux result above applies to the onboarding release only.
+- Host verification now inherits `PYTHONDONTWRITEBYTECODE=1` inside the isolated
+  run, preventing imports from leaving untracked bytecode that blocks the clean
+  baseline guard. The environment is restored afterward. All 95 Windows
+  regressions passed, including a real import and clean-checkout assertion.
+- A private repository baseline passed 14,865 selected tests, 97.9637% aggregate
+  branch-inclusive coverage, and 14 required invoice-conformance tests. Dependency
+  update and PR delivery acceptance remain pending.
+- The current site artifact is https://1506bb03.greenpr-cw0.pages.dev/.
+  Production was rechecked after the diagnostics release: all seven exact
+  assets and five absent-route checks passed. The diagnostics change did not
+  alter site assets.
+- A fresh November 6 resolved CLI dependency scan covered all 33 constrained
+  package entries, exited zero, and reported no vulnerabilities. The local
+  artifact is `dist/dependency-resolved-scan-20261106-final.json`; this result
+  covers the scanned dependency versions, not a general security certification.
+- These follow-ups used local validation and CI-skip commits; they did not add
+  hosted application services or dispatch hosted test runs. Live dependency
+  remediation acceptance remains pending until its retained receipt and PR
+  establish the complete baseline, update, and post-update checks.
+
 Before the first sale, use [billing/manual-sales.md](billing/manual-sales.md) to
 verify the authorized invoice process and agree a private fulfillment channel.
 Do not collect sensitive details or deliver signed licenses on public issues.

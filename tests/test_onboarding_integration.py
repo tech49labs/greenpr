@@ -94,6 +94,20 @@ class OnboardingIntegration(unittest.TestCase):
         receipt = json.loads(next(Path('.git/greenpr-runs').glob('*.json')).read_text())
         self.assertEqual(receipt['base_branch'], 'codex/review-base')
 
+    def test_host_import_does_not_create_untracked_bytecode_and_restores_environment(self):
+        Path('fixture_module.py').write_text('value = 1\n')
+        self.config()
+        os.environ['PYTHONDONTWRITEBYTECODE'] = '0'
+        def verify(config):
+            self.assertEqual(os.environ['PYTHONDONTWRITEBYTECODE'], '1')
+            subprocess.run([sys.executable, '-c', 'import fixture_module'], check=True)
+            self.assertFalse(Path('__pycache__').exists())
+            self.assertEqual(git('status', '--porcelain', '--untracked-files=all'), '')
+            return {}
+        with patch('engine.adapters.prepare_baseline', return_value=None), patch.object(app, '_run_current_checkout', side_effect=verify):
+            self.invoke('--skip-pr')
+        self.assertEqual(os.environ['PYTHONDONTWRITEBYTECODE'], '0')
+
     def test_setup_failure_runs_cleanup_restores_environment_and_keeps_diagnostics(self):
         self.config('setup = ["setup-fixture"]\ncleanup = ["cleanup-fixture"]\n[environment]\nSECRET_KEY = "scoped-fixture-secret"\n')
         os.environ['SECRET_KEY'] = 'original-fixture-secret'
