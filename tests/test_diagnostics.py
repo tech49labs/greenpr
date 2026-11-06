@@ -10,7 +10,7 @@ from engine.diagnostics import classify_failure, diagnostic_session, record_comm
 
 
 class DiagnosticTests(unittest.TestCase):
-    def test_kwese_configuration_error_is_not_an_assertion_failure(self):
+    def test_missing_configuration_is_not_an_assertion_failure(self):
         kind, summary = classify_failure('', 'decouple.UndefinedValueError: SECRET_KEY not found. Declare it as envvar or define a default value.', 1, 'baseline')
         self.assertEqual(kind, 'environment_configuration')
         self.assertIn('test-only', summary)

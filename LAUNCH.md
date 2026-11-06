@@ -58,6 +58,20 @@ substitute for local acceptance.
 
 ## Operational follow-up
 
+### Onboarding and diagnostics release
+
+- [PR #4](https://github.com/tech49labs/greenpr/pull/4) merged as
+  `9d709770612c3d96517d1f855cf1397ec1d050ef`.
+- The updated runner passed 87 regression tests on Windows and Linux, including
+  committed configuration binding, mandatory gates, cleanup failures, retained
+  redacted diagnostics, transitive UV constraints, and PR-delivery error handling.
+- The setup guide is deployed at https://9b25887e.greenpr-cw0.pages.dev/.
+  Production checks passed for all seven exact assets and five absent routes.
+- A fresh public CLI dependency scan verified 33 constrained Python packages
+  and found no actionable updates. This is not a security certification.
+- Real repository acceptance remains separate from these regression results;
+  a passing baseline and post-update run must precede any verified dependency PR.
+
 Before the first sale, use [billing/manual-sales.md](billing/manual-sales.md) to
 verify the authorized invoice process and agree a private fulfillment channel.
 Do not collect sensitive details or deliver signed licenses on public issues.
