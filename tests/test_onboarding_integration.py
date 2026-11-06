@@ -56,6 +56,44 @@ class OnboardingIntegration(unittest.TestCase):
         install.assert_not_called()
         remediation.assert_not_called()
 
+    def test_explicit_base_passed_to_publication_and_default_unchanged(self):
+        for base in (None, 'codex/greenpr-review-base'):
+            calls = []
+            def run(command, **kwargs):
+                calls.append(command)
+                output = command[-1] if command[:2] == ['git', 'check-ref-format'] else 'https://github.com/fixture/repo/pull/42' if command[0] == 'gh' else ''
+                return subprocess.CompletedProcess(command, 0, output, '')
+            vuln = {'package':'example', 'target_version':'2.0'}
+            with patch.object(app.subprocess, 'run', side_effect=run):
+                self.assertTrue(app.create_pull_request(vuln, None, base_branch=base))
+            command = next(c for c in calls if c[:3] == ['gh','pr','create'])
+            if base:
+                self.assertEqual(command[command.index('--base')+1], base)
+                self.assertEqual(vuln['base_branch'], base)
+            else:
+                self.assertNotIn('--base', command)
+
+    def test_invalid_base_refused_before_worktree_setup_or_publication(self):
+        self.config('setup=["must-not-run"]')
+        for invalid in ('bad..branch', '-option', '@{-1}', 'two words'):
+            with self.subTest(base=invalid), patch('engine.runtime.isolated_checkout') as checkout, patch.object(app, 'create_pull_request') as publish:
+                with self.assertRaises(SystemExit) as failure:
+                    self.invoke('--base-branch='+invalid)
+                self.assertEqual(failure.exception.code, 2)
+                checkout.assert_not_called()
+                publish.assert_not_called()
+        with patch.object(app.subprocess, 'run') as process:
+            with self.assertRaises(ValueError):
+                app.create_pull_request({'package':'example','target_version':'2.0'}, None, base_branch='-option')
+            process.assert_not_called()
+
+    def test_selected_base_in_receipt(self):
+        self.config()
+        with patch('engine.adapters.prepare_baseline', return_value=None), patch.object(app, '_run_current_checkout', return_value={}):
+            self.invoke('--base-branch', 'codex/review-base', '--skip-pr')
+        receipt = json.loads(next(Path('.git/greenpr-runs').glob('*.json')).read_text())
+        self.assertEqual(receipt['base_branch'], 'codex/review-base')
+
     def test_setup_failure_runs_cleanup_restores_environment_and_keeps_diagnostics(self):
         self.config('setup = ["setup-fixture"]\ncleanup = ["cleanup-fixture"]\n[environment]\nSECRET_KEY = "scoped-fixture-secret"\n')
         os.environ['SECRET_KEY'] = 'original-fixture-secret'

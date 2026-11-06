@@ -866,9 +866,22 @@ def _render_summary_table(results: List[Dict], total_elapsed: float, skip_pr: bo
     print(f"  Mode: {mode_str}")
     print("-" * 64 + "\n")
 
-def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False, skip_hosted_ci: bool = False) -> bool:
+def validate_base_branch(base_branch):
+    if base_branch is None:
+        return
+    if not isinstance(base_branch, str) or not base_branch or base_branch.startswith('-') or '@{' in base_branch:
+        raise ValueError('Invalid explicit PR base branch')
+    result = subprocess.run(['git', 'check-ref-format', '--branch', base_branch], capture_output=True, text=True)
+    if result.returncode != 0 or result.stdout.strip() != base_branch:
+        raise ValueError('Invalid explicit PR base branch')
+
+
+def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False, skip_hosted_ci: bool = False, base_branch: Optional[str] = None) -> bool:
     """Publish only after every Git operation succeeds; never force push."""
     from engine.diagnostics import redact, record_command
+    validate_base_branch(base_branch)
+    if base_branch is not None:
+        vuln['base_branch'] = base_branch
     if skip_pr:
         return True
     pkg, target = vuln["package"], vuln["target_version"]
@@ -900,8 +913,11 @@ def create_pull_request(vuln: Dict, plan: MigrationPlan, skip_pr: bool = False, 
             body_path = os.path.join(tmp, "body.md")
             with open(body_path, "w", encoding="utf-8") as f:
                 f.write(body)
-            created = publish(["gh", "pr", "create", "--head", branch, "--title", title,
-                               "--body-file", body_path])
+            command = ["gh", "pr", "create", "--head", branch, "--title", title,
+                       "--body-file", body_path]
+            if base_branch is not None:
+                command += ["--base", base_branch]
+            created = publish(command)
             url = redact(created.stdout).strip()
             if not re.fullmatch(r"https://[^\s/]+/[^\s/]+/[^\s/]+/pull/[0-9]+", url):
                 vuln["publication_error"] = "GitHub CLI returned no verifiable pull request URL; inspect the remote before retrying."
@@ -927,6 +943,7 @@ def _run_current_checkout(config=None):
     parser.add_argument("--target-version", type=str, default=None, help="Target version for specific package")
     parser.add_argument("--limit", type=int, default=1, help="One package per run; repeat after reviewing the result")
     parser.add_argument("--skip-pr", action="store_true", help="Retain a separate review worktree with patch and result receipt without publishing a PR")
+    parser.add_argument("--base-branch", default=None, help="Explicit GitHub pull request base branch; default is the repository default")
     parser.add_argument("--skip-hosted-ci", action="store_true", help="Add [skip ci] to the published commit after all local gates pass; required GitHub checks remain pending")
     parser.add_argument("--dry-run", "--scan-only", dest="dry_run", action="store_true", help="Scan and display discovered vulnerabilities without modifying files")
     parser.add_argument("--enable-model-repair", action="store_true", help="Allow source and error traces to be sent to a configured model provider")
@@ -1060,7 +1077,7 @@ def _run_current_checkout(config=None):
 
         if success:
             vuln["verified_gate"] = verified_gate
-            if not create_pull_request(vuln, plan, skip_pr=args.skip_pr, skip_hosted_ci=args.skip_hosted_ci):
+            if not create_pull_request(vuln, plan, skip_pr=args.skip_pr, skip_hosted_ci=args.skip_hosted_ci, base_branch=args.base_branch):
                 sys.exit(1)
             print(f"        ✔ Configured verification passed ({pkg_dur:.1f}s)\n")
             results.append({
@@ -1103,9 +1120,11 @@ def main():
     selection = argparse.ArgumentParser(add_help=False)
     selection.add_argument("--project", default=None)
     selection.add_argument("--ecosystem", default=None)
+    selection.add_argument("--base-branch", default=None)
     selected, _ = selection.parse_known_args()
     original = Path.cwd().resolve()
     try:
+        validate_base_branch(selected.base_branch)
         config = load_config(original)
         if config and selected.project is not None and selected.project != config.project:
             raise ValueError("--project conflicts with .greenpr.toml; use the configured project")
@@ -1143,6 +1162,7 @@ def main():
     original_environment = dict(os.environ)
     try:
         with isolated_checkout() as receipt:
+            receipt['base_branch'] = selected.base_branch
             from engine.adapters import prepare_baseline
             from dataclasses import replace
             candidate_config = load_config(receipt["worktree"])
