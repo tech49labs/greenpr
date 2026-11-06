@@ -1,8 +1,12 @@
-name: 'GreenPR: Autonomous Zero-Hallucination Dependency Remediation'
-description: 'Detects dependency security issues, patches breaking syntax, and guarantees 100% test pass (Exit Code 0) before opening Pull Requests.'
-author: 'tech49labs'
+name: 'GreenPR dependency updates'
+description: 'Update a dependency and require your configured verification command to pass before publishing a pull request.'
+author: 'GreenPR'
 
 inputs:
+  enable_model_repair:
+    description: 'Allow source files and error traces to be sent to the configured model provider'
+    required: false
+    default: 'false'
   test_cmd:
     description: 'Custom command to run project test suite (e.g. pytest, npm test, cargo test). If omitted, automatically detected.'
     required: false
@@ -43,23 +47,30 @@ runs:
     - name: Initialize GreenPR Scanner Core
       shell: bash
       run: |
-        curl -sSL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -o /usr/local/bin/osv-scanner > /dev/null 2>&1 || true
-        chmod +x /usr/local/bin/osv-scanner > /dev/null 2>&1 || true
-        pip install --quiet --upgrade pip
-        pip install --quiet -r ${{ github.action_path }}/requirements.txt
+        command -v osv-scanner >/dev/null || { echo 'Install a reviewed OSV-Scanner version on the runner first.' >&2; exit 1; }
+        python -m pip install --quiet -r "$GITHUB_ACTION_PATH/requirements.txt"
 
     - name: Execute GreenPR Remediation Engine
       shell: bash
       env:
+        GIT_AUTHOR_NAME: GreenPR
+        GIT_COMMITTER_NAME: GreenPR
+        GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         GREENPR_API_KEY: ${{ inputs.api_key }}
-        GEMINI_API_KEY: ${{ inputs.gemini_api_key || inputs.api_key }}
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key || inputs.api_key }}
-        OPENAI_API_KEY: ${{ inputs.openai_api_key || inputs.api_key }}
+        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        GREENPR_TEST_CMD: ${{ inputs.test_cmd }}
+        GREENPR_MODEL_REPAIR: ${{ inputs.enable_model_repair }}
         GREENPR_MODEL: ${{ inputs.model }}
         GH_TOKEN: ${{ inputs.github_token }}
       run: |
-        TEST_ARG=""
-        if [ -n "${{ inputs.test_cmd }}" ]; then
-          TEST_ARG="--test-cmd \"${{ inputs.test_cmd }}\""
+        args=()
+        if [ -n "$GREENPR_TEST_CMD" ]; then
+          args+=(--test-cmd "$GREENPR_TEST_CMD")
         fi
-        python ${{ github.action_path }}/remediate.py $TEST_ARG
+        if [ "$GREENPR_MODEL_REPAIR" = 'true' ]; then
+          args+=(--enable-model-repair)
+        fi
+        python "$GITHUB_ACTION_PATH/remediate.py" "${args[@]}"

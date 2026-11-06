@@ -1,4 +1,12 @@
 __pycache__/
 *.pyc
 .aider*
+.venv/
+.env
+.env.*
+.cosmos/
+cosmos.environment.json
+dist/
 
+.release-deps/
+.release311/

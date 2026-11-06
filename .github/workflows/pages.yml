@@ -1,11 +1,8 @@
-name: Deploy Documentation Portal
+name: Legacy Pages Deployment (manual only)
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'docs/**'
+  # Public releases use the allowlisted static build on Cloudflare.
+  # Keep the legacy deployment available for deliberate recovery only.
   workflow_dispatch:
 
 permissions:

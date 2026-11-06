@@ -1,620 +1,189 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GreenPR — Autonomous Dependency Remediation</title>
-  <meta name="description" content="Autonomous zero-hallucination dependency remediation engine. 100% verified test pass before creating Pull Requests.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg: #000000;
-      --text: #ededed;
-      --text-muted: #888888;
-      --text-dim: #555555;
-      --line: #1c1c1c;
-      --green: #10b981;
-      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      --font-mono: 'JetBrains Mono', Menlo, Monaco, monospace;
-    }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-behavior: smooth; }
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--font-sans);
-      font-size: 15px;
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--line); transition: border-color 0.15s, color 0.15s; }
-    a:hover { color: #fff; border-color: var(--text-muted); }
-
-    .wrap {
-      max-width: 820px;
-      margin: 0 auto;
-      padding: 0 2rem;
-    }
-
-    /* Navigation */
-    nav {
-      padding: 2.5rem 0 4rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-    }
-    .brand {
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      border: none;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .brand:hover { border: none; }
-    .brand-dot {
-      width: 7px;
-      height: 7px;
-      background: var(--green);
-      border-radius: 50%;
-    }
-    .nav-links {
-      display: flex;
-      gap: 1.75rem;
-      font-size: 0.9rem;
-      color: var(--text-muted);
-    }
-    .nav-links a { border: none; }
-    .nav-links a:hover { color: #fff; border: none; }
-
-    /* Hero */
-    .hero {
-      margin-bottom: 5rem;
-    }
-    .hero-meta {
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      color: var(--text-dim);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      margin-bottom: 1.5rem;
-    }
-    h1 {
-      font-size: 2.5rem;
-      font-weight: 600;
-      letter-spacing: -0.035em;
-      line-height: 1.2;
-      margin-bottom: 1.5rem;
-      color: #fff;
-    }
-    .lead {
-      font-size: 1.15rem;
-      color: var(--text-muted);
-      line-height: 1.65;
-      margin-bottom: 2.5rem;
-    }
-    .hero-actions {
-      display: flex;
-      gap: 1.5rem;
-      font-size: 0.9rem;
-      font-weight: 500;
-    }
-    .hero-actions a {
-      border: none;
-    }
-    .action-primary {
-      color: #000;
-      background: #fff;
-      padding: 8px 16px;
-      border-radius: 4px;
-    }
-    .action-primary:hover {
-      background: #e0e0e0;
-      color: #000;
-    }
-    .action-secondary {
-      color: var(--text-muted);
-      padding: 8px 0;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .action-secondary:hover { color: #fff; }
-
-    /* Minimal Terminal */
-    .terminal {
-      margin: 4rem 0 6rem;
-      background: #050505;
-      border: 1px solid var(--line);
-      border-radius: 4px;
-      padding: 1.5rem;
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      line-height: 1.6;
-      color: #bbb;
-      overflow-x: auto;
-    }
-    .t-head {
-      color: var(--text-dim);
-      border-bottom: 1px solid var(--line);
-      padding-bottom: 0.75rem;
-      margin-bottom: 1rem;
-      display: flex;
-      justify-content: space-between;
-    }
-    .t-green { color: var(--green); }
-    .t-white { color: #fff; font-weight: 500; }
-    .t-dim { color: var(--text-dim); }
-
-    /* Divider */
-    hr {
-      border: none;
-      border-top: 1px solid var(--line);
-      margin: 5rem 0;
-    }
-
-    /* Section Typography */
-    .section-label {
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      color: var(--text-dim);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      margin-bottom: 0.75rem;
-    }
-    h2 {
-      font-size: 1.5rem;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      margin-bottom: 1.25rem;
-      color: #fff;
-    }
-    p.intro {
-      font-size: 1rem;
-      color: var(--text-muted);
-      margin-bottom: 3rem;
-    }
-
-    /* Minimal Row Layout */
-    .item-list {
-      display: flex;
-      flex-direction: column;
-      gap: 3rem;
-    }
-    .item {
-      display: grid;
-      grid-template-columns: 200px 1fr;
-      gap: 2rem;
-    }
-    @media (max-width: 680px) {
-      .item { grid-template-columns: 1fr; gap: 0.5rem; }
-      h1 { font-size: 2rem; }
-    }
-    .item-title {
-      font-weight: 500;
-      font-size: 0.95rem;
-      color: #fff;
-    }
-    .item-num {
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      color: var(--text-dim);
-      margin-bottom: 0.25rem;
-    }
-    .item-body {
-      color: var(--text-muted);
-      font-size: 0.95rem;
-      line-height: 1.6;
-    }
-
-    /* Clean Code Block */
-    pre.code-snippet {
-      background: #050505;
-      border: 1px solid var(--line);
-      border-radius: 4px;
-      padding: 1rem 1.25rem;
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      color: #ccc;
-      line-height: 1.6;
-      margin: 1.5rem 0 3rem;
-      overflow-x: auto;
-    }
-
-    /* Minimal Table */
-    .data-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.9rem;
-      margin-top: 1.5rem;
-    }
-    .data-table th, .data-table td {
-      padding: 12px 0;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-    }
-    .data-table th {
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      font-weight: 400;
-    }
-    .data-table td {
-      color: var(--text-muted);
-    }
-    .data-table td.highlight {
-      color: #fff;
-    }
-
-    /* Minimal Pricing Layout */
-    .pricing-rows {
-      display: flex;
-      flex-direction: column;
-      gap: 2.5rem;
-      margin-top: 2.5rem;
-    }
-    .pricing-row {
-      display: grid;
-      grid-template-columns: 190px 140px 1fr 140px;
-      gap: 2rem;
-      align-items: start;
-      padding-bottom: 2.5rem;
-      border-bottom: 1px solid var(--line);
-    }
-    .pricing-row:last-child {
-      border-bottom: none;
-    }
-    @media (max-width: 820px) {
-      .pricing-row { grid-template-columns: 1fr; gap: 1rem; }
-    }
-    .tier-name {
-      font-weight: 600;
-      color: #fff;
-      font-size: 1rem;
-      margin-bottom: 0.25rem;
-    }
-    .tier-target {
-      font-size: 0.85rem;
-      color: var(--text-dim);
-    }
-    .tier-price {
-      font-family: var(--font-mono);
-      font-size: 1.25rem;
-      font-weight: 500;
-      color: #fff;
-    }
-    .tier-price span {
-      font-size: 0.75rem;
-      color: var(--text-dim);
-      font-weight: 400;
-    }
-    .tier-specs {
-      font-size: 0.9rem;
-      color: var(--text-muted);
-      line-height: 1.6;
-    }
-    .tier-action {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 8px 14px;
-      font-size: 0.85rem;
-      font-weight: 500;
-      border-radius: 4px;
-      text-decoration: none;
-      transition: background 0.15s, color 0.15s, border-color 0.15s;
-      white-space: nowrap;
-      text-align: center;
-    }
-    .tier-action.btn-primary {
-      background: #fff;
-      color: #000;
-      border: 1px solid #fff;
-    }
-    .tier-action.btn-primary:hover {
-      background: #e2e2e2;
-      border-color: #e2e2e2;
-      color: #000;
-    }
-    .tier-action.btn-secondary {
-      background: transparent;
-      color: var(--text-muted);
-      border: 1px solid var(--line);
-    }
-    .tier-action.btn-secondary:hover {
-      color: #fff;
-      border-color: var(--text-muted);
-    }
-
-    /* Footer */
-    footer {
-      padding: 5rem 0 4rem;
-      font-size: 0.85rem;
-      color: var(--text-dim);
-      display: flex;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 1rem;
-    }
-    footer a { border: none; }
-    footer a:hover { color: var(--text-muted); }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GreenPR — Dependency updates you can review</title>
+<meta name="description" content="Update vulnerable dependencies, run your checks, and review the changes. GreenPR runs on your infrastructure.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="wrap">
+<header>
+<a class="logo" href="#">
+<span class="mark">✓</span> GreenPR</a>
+<nav aria-label="Main navigation">
+<a href="#how">How it works</a>
+<a href="#pricing">Pricing</a>
+<a href="https://github.com/tech49labs/greenpr">GitHub ↗</a>
+</nav>
+</header>
+<main id="main">
+<section class="hero">
+<div>
+<div class="eyebrow">Dependency maintenance. Under your control.</div>
+<h1>Less patching.<br>More <em>shipping.</em>
+</h1>
+<p class="lead">Turn vulnerable dependencies into changes your team can review. GreenPR updates a package, runs your checks, and opens a pull request when they pass.</p>
+<div class="actions">
+<a class="button" href="#setup">Try it locally ↗</a>
+<a href="#how">See how it works</a>
+</div>
+<p class="small">Your runner. Your checks. Your decision to merge.</p>
+</div>
+<div class="review">
+<div class="review-head">GREENPR / UPDATE PREVIEW <span>Illustrative example</span>
+</div>
+<div class="review-body">
+<h3>A small change.<br>A clear review.</h3>
+<div class="diff">
+<div>− dependency: previous version</div>
+<div class="plus">+ dependency: patched version</div>
+</div>
+<div class="check">01 &nbsp; Update dependency <strong>DIFF READY</strong>
+</div>
+<div class="check">02 &nbsp; Run configured checks <strong>EXIT 0</strong>
+</div>
+<div class="check">03 &nbsp; Open pull request <strong>FOR REVIEW</strong>
+</div>
+</div>
+<div class="review-caption">If verification fails, no pull request is published.</div>
+</div>
+</section>
+<div class="strip">
+<span>Runs on your infrastructure</span>
+<span>No automatic merging</span>
+<span>Local execution supported</span>
+</div>
+<section class="section" id="how">
+<div class="eyebrow">From advisory to review</div>
+<h2>Make dependency updates<br>part of the workday.</h2>
+<div class="steps">
+<article>
+<span class="number">01</span>
+<h3>Find an update</h3>
+<p>Scan dependencies for known vulnerabilities, or choose a package and target version yourself. Inspect the proposed update before changing files.</p>
+</article>
+<article>
+<span class="number">02</span>
+<h3>Check the change</h3>
+<p>Update the dependency and rerun your selected command. A failed baseline stops the run. A failed update stays out of a pull request.</p>
+</article>
+<article>
+<span class="number">03</span>
+<h3>Review and merge</h3>
+<p>Review verified changes in a separate worktree or publish a pull request. Your team reviews the diff and decides whether to merge.</p>
+</article>
+</div>
+<div class="control">
+<h3>Passing checks are evidence.<br>Your review still matters.</h3>
+<p>GreenPR can only verify what your command covers. It does not guarantee a vulnerability-free application or production safety. Use a disposable checkout and checks that cover your project's requirements.</p>
+</div>
+</section>
+<section class="section" id="pricing">
+<div class="eyebrow">Licensing</div>
+<h2>Start with one repository.<br>Grow on your terms.</h2>
+<p class="lead">Commercial licenses cover private repository use. Compute and model-provider charges are separate.</p>
+<div class="plans">
+<article class="plan">
+<h3>Community</h3>
+<p class="small">Public projects &amp; local evaluation</p>
+<div class="price">$0</div>
+<p class="unit">No subscription</p>
+<ul>
+<li>Public open-source repositories</li>
+<li>Local personal evaluation</li>
+<li>Dependency scanning and verification</li>
+<li>Review changes in your own checkout</li>
+</ul>
+<a class="button secondary" href="#setup">Start evaluating</a>
+</article>
+<article class="plan featured">
+<h3>Team</h3>
+<p class="small">Private commercial repositories</p>
+<div class="price">$49 <small>USD</small>
+</div>
+<p class="unit">per repository / month</p>
+<ul>
+<li>Commercial license for one repository</li>
+<li>Run on your workstation or runner</li>
+<li>Your existing verification command</li>
+<li>Optional model-assisted source repair</li>
+</ul>
+<a class="button" href="https://github.com/tech49labs/greenpr/issues/new?template=team-license.yml">Request Team on GitHub</a>
+</article>
+<article class="plan">
+<h3>Enterprise</h3>
+<p class="small">Organization-wide licensing</p>
+<div class="price">$899 <small>USD</small>
+</div>
+<p class="unit">per organization / month</p>
+<ul>
+<li>License across your organization</li>
+<li>Unlimited repositories under one license</li>
+<li>Use your own runner infrastructure</li>
+<li>Discuss rollout requirements with us</li>
+</ul>
+<a class="button secondary" href="https://github.com/tech49labs/greenpr/issues/new?template=enterprise-license.yml">Discuss Enterprise on GitHub</a>
+</article>
+</div>
+<p class="small pricing-note">Request a commercial license through GitHub. A GitHub account is required, and requests are public. Do not post payment details, private repository information, source code, or tokens. No payment is collected on this website. We confirm license scope and billing before purchase.</p>
+</section>
+<section class="section setup" id="setup">
+<div>
+<div class="eyebrow">Local quickstart</div>
+<h2>Start with a scan.</h2>
+<p>Install GreenPR separately, then run it from the repository you want to inspect.</p>
+<p class="small">Follow the setup guide to install the required tools. GreenPR verifies updates in a separate worktree; use a dedicated runner for untrusted project scripts.</p>
+<a href="guide.html">Read the setup guide ↗</a>
+</div>
+<pre>
+<code># From the GreenPR tool directory
+python -m venv .venv
+# Activate the environment, then:
+python -m pip install -r requirements.txt
 
-  <div class="wrap">
+# Change into the repository to inspect
+cd /path/to/your/repository
+python /path/to/greenpr/remediate.py --scan-only
 
-    <!-- Header -->
-    <nav>
-      <a href="#" class="brand">
-        <span class="brand-dot"></span>
-        GreenPR
-      </a>
-      <div class="nav-links">
-        <a href="#architecture">Architecture</a>
-        <a href="#quickstart">Quickstart</a>
-        <a href="#monorepo">Monorepos</a>
-        <a href="#pricing">Pricing</a>
-        <a href="https://github.com/tech49labs/greenpr" target="_blank">GitHub ↗</a>
-      </div>
-    </nav>
-
-    <!-- Hero -->
-    <div class="hero">
-      <div class="hero-meta">ENGINEERING RELEASE 1.0</div>
-      <h1>Autonomous dependency remediation.<br>100% test-verified before Pull Request.</h1>
-      <p class="lead">Standard bots bump dependencies blindly and leave broken builds. GreenPR scans vulnerability advisories, repairs breaking syntax, and guarantees an Exit Code 0 test pass before opening a Pull Request.</p>
-      <div class="hero-actions">
-        <a href="#pricing" class="action-primary">View Pricing & Plans</a>
-        <a href="#quickstart" class="action-secondary">Quickstart Guide ↗</a>
-        <a href="https://github.com/tech49labs/greenpr" target="_blank" class="action-secondary">GitHub ↗</a>
-      </div>
-    </div>
-
-    <!-- Raw Monospace Output (No cartoon dots or shadows) -->
-    <div class="terminal">
-      <div class="t-head">
-        <span>$ greenpr --skip-pr</span>
-        <span>Cosmos monorepo (root)</span>
-      </div>
-      <div><span class="t-green">GreenPR Dependency Remediation Engine v1.0</span> | tech49labs</div>
-      <div>Target:         /workspace/Cosmos</div>
-      <div>Active Profile: <span class="t-white">Polyglot Monorepo (Python, Node.js)</span></div>
-      <div class="t-dim">[GreenPR Radar] Scanning dependency graph for security vulnerabilities...</div>
-      <br>
-      <div>Discovered 5 security remediation(s):</div>
-      <br>
-      <div class="t-dim">  SUBPROJECT               PACKAGE         CURRENT   TARGET    ADVISORY</div>
-      <div class="t-dim">  ---------------------------------------------------------------------------------</div>
-      <div>  enterprise/audit         @vitest/mocker  3.2.4   → 4.1.11    GHSA-82fw-gwwq-j7x9</div>
-      <div>  enterprise/audit         source-map-js   1.2.1   → 1.2.2     GHSA-68fv-2mgg-jv7q</div>
-      <div>  enterprise/audit         tinypool        1.1.1   → 2.1.1     GHSA-5gmw-xhrv-c9v3</div>
-      <div>  enterprise/audit         vite            7.3.6   → 7.3.7     GHSA-587h-7wmj-h5pm</div>
-      <div>  enterprise/audit         vitest          3.2.4   → 3.2.6     GHSA-5xrq-8626-4rwp</div>
-      <div class="t-dim">  ---------------------------------------------------------------------------------</div>
-      <br>
-      <div>Applying remediations:</div>
-      <div>  [1/5] enterprise/audit : @vitest/mocker (3.2.4 → 4.1.11) <span class="t-green">✔ Verified safe (11.0s)</span></div>
-      <div>  [2/5] enterprise/audit : source-map-js (1.2.1 → 1.2.2)  <span class="t-green">✔ Verified safe (7.1s)</span></div>
-      <div>  [3/5] enterprise/audit : tinypool (1.1.1 → 2.1.1)        <span class="t-green">✔ Verified safe (8.1s)</span></div>
-      <div>  [4/5] enterprise/audit : vite (7.3.6 → 7.3.7)            <span class="t-green">✔ Verified safe (6.4s)</span></div>
-      <div>  [5/5] enterprise/audit : vitest (3.2.4 → 3.2.6)          <span class="t-green">✔ Verified safe (7.5s)</span></div>
-      <br>
-      <div class="t-dim">----------------------------------------------------------------</div>
-      <div>Remediation Summary:</div>
-      <div>  <span class="t-green">✔ 5 package(s) verified safe (100% gate pass)</span></div>
-      <div>  ⏱ Total duration: 40s</div>
-      <div class="t-dim">----------------------------------------------------------------</div>
-    </div>
-
-    <!-- Architecture Section (Text-driven, whitespace layout, NO CARDS) -->
-    <section id="architecture">
-      <div class="section-label">Architecture</div>
-      <h2>Deterministic, closed-loop execution.</h2>
-      <p class="intro">Every remediation follows a deterministic pipeline. If compilation fails and autonomous healing cannot resolve it, the codebase reverts cleanly.</p>
-
-      <div class="item-list">
-        <div class="item">
-          <div>
-            <div class="item-num">01</div>
-            <div class="item-title">Semver Filtering</div>
-          </div>
-          <div class="item-body">
-            Parses advisory event trees across branches. Filters out unmaintained legacy major versions and pre-releases to select the lowest stable patch satisfying the CVE without accidental downgrades.
-          </div>
-        </div>
-
-        <div class="item">
-          <div>
-            <div class="item-num">02</div>
-            <div class="item-title">Verification Gate</div>
-          </div>
-          <div class="item-body">
-            Executes your project's native verification suite (<code>pnpm typecheck</code>, <code>pytest</code>, <code>cargo test</code>, <code>go test</code>) inside the target subproject directory. Requires a strict exit code 0 to proceed.
-          </div>
-        </div>
-
-        <div class="item">
-          <div>
-            <div class="item-num">03</div>
-            <div class="item-title">Interface Repair</div>
-          </div>
-          <div class="item-body">
-            When upgrades alter imports, function signatures, or configuration options, the engine isolates candidate files from error traces and applies surgical repairs before re-running verification.
-          </div>
-        </div>
-
-        <div class="item">
-          <div>
-            <div class="item-num">04</div>
-            <div class="item-title">Atomic Rollback</div>
-          </div>
-          <div class="item-body">
-            If a package fails verification and cannot achieve clean compilation through code healing, all staged changes are immediately reverted via non-interactive atomic rollback.
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <hr>
-
-    <!-- Monorepo Section -->
-    <section id="monorepo">
-      <div class="section-label">Ecosystems</div>
-      <h2>Polyglot monorepo autonomy.</h2>
-      <p class="intro">Run GreenPR once from the repository root. It sweeps all submodules across languages and applies native package manager tooling in each directory.</p>
-
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Ecosystem</th>
-            <th>Manifest Discovery</th>
-            <th>Package Manager</th>
-            <th>Verification Command</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="highlight">TypeScript / Node</td>
-            <td><code>package.json</code>, <code>pnpm-lock.yaml</code></td>
-            <td><code>pnpm</code>, <code>bun</code>, <code>yarn</code>, <code>npm</code></td>
-            <td><code>pnpm typecheck</code> / <code>test</code></td>
-          </tr>
-          <tr>
-            <td class="highlight">Python</td>
-            <td><code>pyproject.toml</code>, <code>poetry.lock</code></td>
-            <td><code>uv</code>, <code>poetry</code>, <code>pip</code></td>
-            <td><code>pytest</code> / <code>mypy</code></td>
-          </tr>
-          <tr>
-            <td class="highlight">Go</td>
-            <td><code>go.mod</code></td>
-            <td><code>go get</code> + <code>go mod tidy</code></td>
-            <td><code>go test ./...</code></td>
-          </tr>
-          <tr>
-            <td class="highlight">Rust</td>
-            <td><code>Cargo.toml</code></td>
-            <td><code>cargo update --precise</code></td>
-            <td><code>cargo test</code></td>
-          </tr>
-          <tr>
-            <td class="highlight">Java / .NET</td>
-            <td><code>pom.xml</code>, <code>*.csproj</code></td>
-            <td><code>mvn</code>, <code>dotnet</code></td>
-            <td><code>mvn test</code>, <code>dotnet test</code></td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
-
-    <hr>
-
-    <!-- Quickstart -->
-    <section id="quickstart">
-      <div class="section-label">Deployment</div>
-      <h2>Run locally or on CI.</h2>
-      <p class="intro">Bring-Your-Own-Compute architecture. Run on local workstations with zero CI cost, or integrate into your existing GitHub Actions runner pipeline.</p>
-
-      <div class="item-title" style="margin-bottom: 0.5rem;">Option A — Local Workstation CLI ($0 Compute)</div>
-      <p style="color:var(--text-muted); font-size: 0.95rem;">Run directly on your local machine before committing code. Consumes 0 GitHub Actions compute minutes.</p>
-      
-      <pre class="code-snippet">git clone https://github.com/tech49labs/greenpr.git
-cd greenpr
-pip install -r requirements.txt
-
-# Run autonomous remediation across your repo:
-python remediate.py
-
-# Verify and stage changes locally without publishing PR:
-python remediate.py --skip-pr
-
-# Target a specific package directly:
-python remediate.py --package vite --target-version 7.3.7</pre>
-
-      <div class="item-title" style="margin-bottom: 0.5rem;">Option B — GitHub Actions Workflow</div>
-      <p style="color:var(--text-muted); font-size: 0.95rem;">Drop 10 lines of YAML into <code>.github/workflows/greenpr.yml</code>:</p>
-
-      <pre class="code-snippet">- uses: actions/checkout@v4
-  with:
-    fetch-depth: 0
-
-- uses: tech49labs/greenpr@v1
-  with:
-    api_key: ${{ secrets.GREENPR_API_KEY }}
-    github_token: ${{ secrets.GITHUB_TOKEN }}</pre>
-    </section>
-
-    <hr>
-
-    <!-- Pricing & Licensing -->
-    <section id="pricing">
-      <div class="section-label">Pricing & Licensing</div>
-      <h2>Transparent, deterministic plans.</h2>
-      <p class="intro">Free for public open-source repositories and developer evaluation. Commercial private repository usage requires an active license with guaranteed 100% test-verified PRs.</p>
-
-      <div class="pricing-rows">
-        <div class="pricing-row">
-          <div>
-            <div class="tier-name">Community</div>
-            <div class="tier-target">Open source & evaluation</div>
-          </div>
-          <div class="tier-price">$0 <span>/ mo</span></div>
-          <div class="tier-specs">
-            Public repository usage, vulnerability radar scan, semver target resolution, deterministic Exit Code 0 verification gate, local workstation CLI execution.
-          </div>
-          <div>
-            <a href="https://github.com/tech49labs/greenpr" target="_blank" class="tier-action btn-secondary">Get Started Free ↗</a>
-          </div>
-        </div>
-
-        <div class="pricing-row">
-          <div>
-            <div class="tier-name">Team</div>
-            <div class="tier-target">Commercial repositories</div>
-          </div>
-          <div class="tier-price">$49 <span>/ repo / mo</span></div>
-          <div class="tier-specs">
-            Private commercial repository license, autonomous multi-tier code healing, breaking API signature refactoring, lockfile synchronization (npm, pnpm, bun, poetry, uv, cargo), up to 10 monorepo subprojects.
-          </div>
-          <div>
-            <a href="mailto:licensing@tech49labs.com?subject=GreenPR%20Team%20License%20Activation%20($49/mo)&body=Hello%20tech49labs%20team,%0D%0A%0D%0AI%20would%20like%20to%20activate%20a%20GreenPR%20Team%20License%20($49/repo/month).%0D%0A%0D%0ARepository%20URL:%20%0D%0AOrganization%20Name:%20%0D%0ABilling%20Email:%20" class="tier-action btn-primary">Subscribe $49</a>
-          </div>
-        </div>
-
-        <div class="pricing-row">
-          <div>
-            <div class="tier-name">Enterprise</div>
-            <div class="tier-target">Scale-up & monorepos</div>
-          </div>
-          <div class="tier-price">$899 <span>/ org / mo</span></div>
-          <div class="tier-specs">
-            Organization-wide unlimited repositories & subprojects, air-gapped / private VPC runner support, self-hosted model endpoints (Ollama / vLLM), zero-hallucination compliance SLA guarantee, priority integration support.
-          </div>
-          <div>
-            <a href="mailto:licensing@tech49labs.com?subject=GreenPR%20Enterprise%20Subscription%20($899/mo)&body=Hello%20tech49labs%20team,%0D%0A%0D%0AWe%20would%20like%20to%20deploy%20the%20GreenPR%20Enterprise%20License%20($899/org/month).%0D%0A%0D%0AOrganization%20Name:%20%0D%0ATeam%20Size%20/%20Repos:%20%0D%0ABilling%20Email:%20" class="tier-action btn-primary">Subscribe $899</a>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Footer -->
-    <footer>
-      <div>© 2026 tech49labs. GreenPR is proprietary software. All rights reserved.</div>
-      <div>
-        <a href="#pricing">Pricing</a> &nbsp;·&nbsp;
-        <a href="https://github.com/tech49labs/greenpr" target="_blank">GitHub</a> &nbsp;·&nbsp;
-        <a href="mailto:licensing@tech49labs.com">licensing@tech49labs.com</a>
-      </div>
-    </footer>
-
-  </div>
-
+# Verify one update in a review worktree
+python /path/to/greenpr/remediate.py --test-cmd "npm test" --skip-pr</code>
+</pre>
+</section>
+<section class="section">
+<div class="eyebrow">Before you start</div>
+<h2>Clear boundaries. Fewer surprises.</h2>
+<details>
+<summary>Does GreenPR send code to a model provider?</summary>
+<p>Model-assisted repair is opt-in. When enabled, candidate source files and error traces may be sent to your configured provider. Dependency updates and verification do not require model repair.</p>
+</details>
+<details>
+<summary>What happens when checks fail?</summary>
+<p>A failed baseline stops the run. Remediation runs in a separate worktree. If an update fails verification, no pull request is published and your original checkout remains unchanged. Package installs and tests can still have effects outside Git, so use a dedicated runner.</p>
+</details>
+<details>
+<summary>Which projects can I use it with?</summary>
+<p>Adapter coverage varies by ecosystem. Start with one dependency and validate the manifest, lockfile, installed version, and checks. The README documents the release scope and limitations.</p>
+</details>
+<details>
+<summary>Where does GreenPR run?</summary>
+<p>GreenPR runs on infrastructure you control. No hosted account is required to evaluate the runner. Model usage and CI compute, if you choose them, are billed separately by those providers. GreenPR does not merge or deploy your application.</p>
+</details>
+</section>
+<section class="end">
+<div class="eyebrow">A smaller maintenance queue</div>
+<h2>Let the checks run.<br>Keep the judgment with your team.</h2>
+<a class="button" href="#setup">Get started with GreenPR ↗</a>
+</section>
+</main>
+<footer>
+<span>© 2026 GreenPR</span>
+<span>
+<a href="privacy.html">Privacy</a> / <a href="https://github.com/tech49labs/greenpr/blob/main/LICENSE">License</a> / <a href="https://github.com/tech49labs/greenpr/issues/new/choose">Contact GreenPR</a>
+</span>
+</footer>
+</div>
 </body>
 </html>
