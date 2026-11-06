@@ -9,19 +9,14 @@ Publish only an approved GreenPR contact address after a send/reply privacy test
 
 ## Ready before collecting money
 
-- Confirm the Team/Enterprise request reaches the assigned operator. Label
-  rehearsals TEST; never put customer identity, scope, keys or licenses in issues.
-- Choose a free customer-facing alias or a separate free inbox. A sender display
-  name does not hide its underlying address. An alias must preserve privacy on
-  replies, attachments, signatures, quoted headers and bounces. Verify both ends
-  using controlled addresses before publishing it. Do not publish the internal
-  operator inbox. SimpleLogin Free supports replies but not initiating new
-  conversations; have customers initiate contact if that option is selected.
-- Approve an existing manual payment method. A PDF invoice plus bank transfer is
-  possible subject to the bank's fees/currency support. PayPal invoices are a
-  separate optional method with transaction fees. There is no payment integration
-  in this product. Verify actual customer-facing payee/receipt information and
-  the agreed currency before use; a brand display name alone is insufficient.
+- Verify both pricing buttons reach the published private enquiry form. Check
+  plan, company name, contact name, email and optional contact details, anonymous
+  access, private responses and the new-response email notification.
+- Keep the receiving inbox outside public pages and source. No new mailbox or
+  forwarding-service account is required. The owner contacts prospects using
+  their supplied details and handles payment arrangements directly.
+- Do not add banking fields, checkout, customer accounts or automated billing.
+  This form takes no payment and does not activate a subscription.
 - Record signed-key readiness without exporting secrets. The November 6 read-only
   check found a matching Ed25519 key and restricted file access; a domain-separated
   non-license challenge verified. This does not establish backup recovery.
@@ -31,9 +26,8 @@ Publish only an approved GreenPR contact address after a send/reply privacy test
 
 ## Request to activation
 
-1. Acknowledge publicly: "Thanks for your GreenPR request. Please contact us at
-   [APPROVED PUBLIC CONTACT] with reference [ISSUE NUMBER]. Do not post private
-   scope, personal details, payment evidence or keys here."
+1. Open the private response from its notification. Follow up through the
+   customer-provided contact details; do not copy their identity or scope to GitHub.
 2. Privately confirm plan, exact GitHub owner/repository or organization, customer
    identity, USD price, paid period, tax/payment terms and support contact. BYOK
    credentials stay with the customer and are never requested for licensing.
@@ -66,11 +60,7 @@ until signed expiry. Explain that limit before purchase. Record refunds/disputes
 and any corrected license. Support intake collects version, OS, receipt ID and
 sanitized error; private code/credentials never belong in a public issue.
 
-Owner sign-offs still needed: public contact/privacy test, payment method/payee
-display, key-backup recovery, intake notification acknowledgment, and the actual
-first paid fulfillment. This checklist is preparation, not a claim of settlement
-or customer activation.
-
-References: [SimpleLogin Free](https://simplelogin.io/pricing/),
-[Proton free inbox](https://proton.me/support/create-a-free-email-account-address),
-[PayPal invoicing](https://www.paypal.com/ca/business/accept-payments/invoice).
+The owner handles payment and real fulfillment. Private-form submission and
+notification were verified with fixture details on November 6. This does not
+prove settled funds or customer activation. Key-backup recovery and any actual
+license issuance remain separate operator responsibilities.

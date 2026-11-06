@@ -1,38 +1,30 @@
 # GreenPR manual sales and license fulfillment
 
-The launch uses public GitHub requests, manually confirmed payment, and signed offline
-licenses. The website does not collect payment or activate subscriptions.
-`catalog.json` records reference prices only. No hosted backend is required.
-Use the [first-sale checklist](first-sale-checklist.md) for contact privacy,
-payment confirmation, issuance, activation and renewal handoffs. Copy the empty
-[customer register](customer-register.template.csv) to a private location before
-recording any real customer information.
+The launch uses a private plan enquiry, owner-managed payment arrangements and
+signed offline licenses. The website does not collect payment or activate
+subscriptions. No GreenPR customer account or billing backend is required.
 
-## Request and payment
+## Request and owner follow-up
 
-1. Review the [Team request form](https://github.com/tech49labs/greenpr/issues/new?template=team-license.yml)
-   or [Enterprise request form](https://github.com/tech49labs/greenpr/issues/new?template=enterprise-license.yml).
-   General requests use the [issue chooser](https://github.com/tech49labs/greenpr/issues/new/choose).
-   Forms assign requests to verified account `Mbuso-Harvey`; GitHub handles
-   notifications according to that account's settings. No paid mailbox is needed.
-2. Keep the public request limited to plan, repository count and non-sensitive
-   requirements. Do not request personal information, payment details, private
-   repository names, license files or code publicly. Agree an appropriate private
-   channel manually before collecting customer identity, exact repository scope,
-   payment information or delivering licenses. That channel is not yet configured
-   or promised by the public form.
-3. Quote Team at USD 49 per repository/month or Enterprise at USD 899 per GitHub
-   organization/month. Team licenses each cover one repository; Enterprise covers
-   one GitHub organization. Record applicable tax and payment terms on the agreed
-   invoice before collecting payment. Automatic recurring collection is not live.
-4. Issue the agreed invoice using the operator's authorized payment process.
-   Product names, descriptions, customer communications, and license issuer must
-   say **GreenPR**. Verify the actual receipt and statement information before
-   using a payment method. Do not change shared account-wide branding or conceal
-   legally required merchant information.
-5. Confirm settled payment directly in the provider, matching customer, invoice,
-   amount, currency, and paid period. A screenshot, email, or browser success page
-   is not payment confirmation.
+1. Both paid-plan buttons open the [private enquiry form](https://docs.google.com/forms/d/e/1FAIpQLSd102fTw1I4rqFDYx00odjJO2aLth251H5znuUcI4KAitSokQ/viewform).
+   It collects plan, company name, contact name, email and optional contact details.
+   Visitors do not need to sign in. Responses are not published on GitHub or
+   shared with other respondents.
+2. The existing operator account owns the form and receives new-response email
+   notifications. The receiving address stays outside source and public pages.
+   Open the notification's View Response link to inspect the contact details.
+   Do not place those details into a public issue.
+3. The owner contacts the prospect and handles all payment arrangements directly.
+   This launch task does not configure bank accounts, collect banking details,
+   process funds or introduce automated billing. The form takes no payment.
+4. Team remains USD 49 per repository/month; Enterprise remains USD 899 per GitHub
+   organization/month. Licensing and any signed-license issuance follow the
+   separately agreed customer scope and owner-confirmed payment.
+
+A marked fixture enquiry was accepted on November 6, 2026 and its new-response
+notification was found in the existing private inbox. No production customer
+payment or license was involved. Public support still uses sanitized GitHub
+issues; personal contact details belong in the private enquiry channel.
 
 ## Issue and deliver
 
